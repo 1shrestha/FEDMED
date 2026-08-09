@@ -26,7 +26,7 @@ from src.models.base_model import BaseModel
 from src.models.model_factory import ModelFactory
 
 
-class TestModel(BaseModel):
+class DummyModel(BaseModel):
     """
     Minimal PyTorch model used exclusively for testing.
 
@@ -53,10 +53,10 @@ def reset_model_factory() -> None:
 
 
 @pytest.fixture
-def model() -> TestModel:
+def model() -> DummyModel:
     """Create a fresh test model."""
 
-    return TestModel(
+    return DummyModel(
         name="test_model",
         device="cpu",
     )
@@ -67,7 +67,7 @@ def model() -> TestModel:
 # ============================================================
 
 
-def test_model_builds_successfully(model: TestModel) -> None:
+def test_model_builds_successfully(model: DummyModel) -> None:
     """Verify that a concrete BaseModel can be created."""
 
     assert model.name == "test_model"
@@ -75,7 +75,7 @@ def test_model_builds_successfully(model: TestModel) -> None:
     assert model.device == torch.device("cpu")
 
 
-def test_forward_pass(model: TestModel) -> None:
+def test_forward_pass(model: DummyModel) -> None:
     """Verify that the model produces the expected output shape."""
 
     inputs = torch.randn(4, 10)
@@ -85,7 +85,7 @@ def test_forward_pass(model: TestModel) -> None:
     assert outputs.shape == (4, 2)
 
 
-def test_train_mode(model: TestModel) -> None:
+def test_train_mode(model: DummyModel) -> None:
     """Verify that the model can enter training mode."""
 
     model.train_mode()
@@ -93,7 +93,7 @@ def test_train_mode(model: TestModel) -> None:
     assert model.network.training is True
 
 
-def test_eval_mode(model: TestModel) -> None:
+def test_eval_mode(model: DummyModel) -> None:
     """Verify that the model can enter evaluation mode."""
 
     model.eval_mode()
@@ -101,7 +101,7 @@ def test_eval_mode(model: TestModel) -> None:
     assert model.network.training is False
 
 
-def test_parameter_extraction(model: TestModel) -> None:
+def test_parameter_extraction(model: DummyModel) -> None:
     """Verify that model state can be extracted as NumPy arrays."""
 
     parameters = model.get_parameters()
@@ -113,7 +113,7 @@ def test_parameter_extraction(model: TestModel) -> None:
         assert isinstance(parameter, np.ndarray)
 
 
-def test_parameter_round_trip(model: TestModel) -> None:
+def test_parameter_round_trip(model: DummyModel) -> None:
     """
     Verify that model parameters can be extracted,
     modified, and restored correctly.
@@ -149,7 +149,7 @@ def test_parameter_round_trip(model: TestModel) -> None:
         )
 
 
-def test_parameter_count_mismatch(model: TestModel) -> None:
+def test_parameter_count_mismatch(model: DummyModel) -> None:
     """Verify that an incorrect number of state arrays raises ModelError."""
 
     parameters = model.get_parameters()
@@ -160,7 +160,7 @@ def test_parameter_count_mismatch(model: TestModel) -> None:
         model.set_parameters(parameters)
 
 
-def test_parameter_shape_mismatch(model: TestModel) -> None:
+def test_parameter_shape_mismatch(model: DummyModel) -> None:
     """Verify that an incorrect tensor shape raises ModelError."""
 
     parameters = model.get_parameters()
@@ -174,7 +174,7 @@ def test_parameter_shape_mismatch(model: TestModel) -> None:
         model.set_parameters(parameters)
 
 
-def test_state_dict_round_trip(model: TestModel) -> None:
+def test_state_dict_round_trip(model: DummyModel) -> None:
     """Verify PyTorch checkpoint state can be saved and restored."""
 
     original_state = {
@@ -197,7 +197,7 @@ def test_state_dict_round_trip(model: TestModel) -> None:
         )
 
 
-def test_device_handling(model: TestModel) -> None:
+def test_device_handling(model: DummyModel) -> None:
     """Verify model device management."""
 
     model.to("cpu")
@@ -208,7 +208,7 @@ def test_device_handling(model: TestModel) -> None:
         assert parameter.device == torch.device("cpu")
 
 
-def test_model_metadata(model: TestModel) -> None:
+def test_model_metadata(model: DummyModel) -> None:
     """Verify model metadata."""
 
     metadata = model.metadata
@@ -228,7 +228,7 @@ def test_register_model() -> None:
 
     ModelFactory.register(
         "test_model",
-        TestModel,
+        DummyModel,
     )
 
     assert ModelFactory.is_registered("test_model")
@@ -239,7 +239,7 @@ def test_register_normalizes_model_name() -> None:
 
     ModelFactory.register(
         "  TEST_MODEL  ",
-        TestModel,
+        DummyModel,
     )
 
     assert ModelFactory.is_registered("test_model")
@@ -250,7 +250,7 @@ def test_create_registered_model() -> None:
 
     ModelFactory.register(
         "test_model",
-        TestModel,
+        DummyModel,
     )
 
     model = ModelFactory.create(
@@ -259,7 +259,7 @@ def test_create_registered_model() -> None:
         device="cpu",
     )
 
-    assert isinstance(model, TestModel)
+    assert isinstance(model, DummyModel)
     assert model.name == "factory_model"
 
 
@@ -268,12 +268,12 @@ def test_available_models() -> None:
 
     ModelFactory.register(
         "model_b",
-        TestModel,
+        DummyModel,
     )
 
     ModelFactory.register(
         "model_a",
-        TestModel,
+        DummyModel,
     )
 
     assert ModelFactory.available_models() == [
@@ -294,13 +294,13 @@ def test_duplicate_registration_raises_error() -> None:
 
     ModelFactory.register(
         "test_model",
-        TestModel,
+        DummyModel,
     )
 
     with pytest.raises(ModelError):
         ModelFactory.register(
             "test_model",
-            TestModel,
+            DummyModel,
         )
 
 
@@ -323,7 +323,7 @@ def test_empty_model_name_raises_error() -> None:
     with pytest.raises(ModelError):
         ModelFactory.register(
             "",
-            TestModel,
+            DummyModel,
         )
 
 
@@ -332,7 +332,7 @@ def test_factory_clear_registry() -> None:
 
     ModelFactory.register(
         "test_model",
-        TestModel,
+        DummyModel,
     )
 
     assert ModelFactory.available_models() == ["test_model"]
