@@ -1,0 +1,15 @@
+# ============================================================
+# FedMed - Core Dependencies
+# ============================================================
+
+# Numerical computing
+numpy
+
+# Configuration
+PyYAML
+
+# Deep learning
+torch
+
+# Testing
+pytest
