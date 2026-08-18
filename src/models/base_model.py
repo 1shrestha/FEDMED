@@ -27,7 +27,7 @@ This module intentionally does NOT contain:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 import torch
@@ -47,12 +47,22 @@ class BaseModel(ABC):
 
     - Model construction
     - Forward passes
+    - PyTorch parameter access
+    - PyTorch buffer access
     - Model state extraction
     - Model state loading
     - Device management
     - Training/evaluation mode
     - Checkpoint compatibility
     - Model metadata
+
+    The PyTorch-compatible parameter and buffer methods provide
+    a controlled interface for infrastructure layers such as the
+    Trainer without exposing architecture-specific implementation
+    details.
+
+    Federated parameter exchange remains separate through
+    ``get_parameters()`` and ``set_parameters()``.
     """
 
     def __init__(
@@ -130,6 +140,109 @@ class BaseModel(ABC):
         return self._network(x)
 
     # ------------------------------------------------------------------
+    # PyTorch parameter access
+    # ------------------------------------------------------------------
+
+    def parameters(
+        self,
+        recurse: bool = True,
+    ) -> Iterator[nn.Parameter]:
+        """
+        Iterate over trainable model parameters.
+
+        This provides a controlled PyTorch-compatible parameter
+        interface for infrastructure components such as optimizers.
+
+        It does NOT define the federated parameter representation.
+        Federated parameter exchange is handled separately by
+        ``get_parameters()`` and ``set_parameters()``.
+
+        Args:
+            recurse:
+                Whether to include parameters of child modules.
+
+        Yields:
+            ``torch.nn.Parameter`` objects belonging to the
+            underlying network.
+        """
+
+        return self._network.parameters(recurse=recurse)
+
+    def named_parameters(
+        self,
+        prefix: str = "",
+        recurse: bool = True,
+    ) -> Iterator[tuple[str, nn.Parameter]]:
+        """
+        Iterate over model parameters together with their names.
+
+        Args:
+            prefix:
+                Optional prefix passed to the underlying PyTorch
+                module.
+
+            recurse:
+                Whether to include parameters of child modules.
+
+        Yields:
+            ``(name, parameter)`` pairs from the underlying network.
+        """
+
+        return self._network.named_parameters(
+            prefix=prefix,
+            recurse=recurse,
+        )
+
+    # ------------------------------------------------------------------
+    # PyTorch buffer access
+    # ------------------------------------------------------------------
+
+    def buffers(
+        self,
+        recurse: bool = True,
+    ) -> Iterator[torch.Tensor]:
+        """
+        Iterate over persistent model buffers.
+
+        Buffers are not trainable parameters but may be part of the
+        model's state, for example BatchNorm running statistics.
+
+        Args:
+            recurse:
+                Whether to include buffers of child modules.
+
+        Yields:
+            Tensor buffers belonging to the underlying network.
+        """
+
+        return self._network.buffers(recurse=recurse)
+
+    def named_buffers(
+        self,
+        prefix: str = "",
+        recurse: bool = True,
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        """
+        Iterate over model buffers together with their names.
+
+        Args:
+            prefix:
+                Optional prefix passed to the underlying PyTorch
+                module.
+
+            recurse:
+                Whether to include buffers of child modules.
+
+        Yields:
+            ``(name, buffer)`` pairs from the underlying network.
+        """
+
+        return self._network.named_buffers(
+            prefix=prefix,
+            recurse=recurse,
+        )
+
+    # ------------------------------------------------------------------
     # Model state exchange
     # ------------------------------------------------------------------
 
@@ -185,6 +298,13 @@ class BaseModel(ABC):
         for key, value in zip(current_keys, parameters):
             expected_tensor = current_state[key]
 
+            if not isinstance(value, np.ndarray):
+                raise ModelError(
+                    f"Parameter '{key}' for model '{self.name}' "
+                    f"must be a NumPy array, got "
+                    f"{type(value).__name__}."
+                )
+
             if tuple(value.shape) != tuple(expected_tensor.shape):
                 raise ModelError(
                     f"Shape mismatch for '{key}' in model "
@@ -220,6 +340,9 @@ class BaseModel(ABC):
 
         This is intended for checkpointing and local PyTorch
         persistence.
+
+        Returns:
+            The underlying network's state dictionary.
         """
 
         return self._network.state_dict()
@@ -233,8 +356,19 @@ class BaseModel(ABC):
 
         Args:
             state:
-                State dictionary previously produced by ``state_dict``.
+                State dictionary previously produced by
+                ``state_dict()``.
+
+        Raises:
+            ModelError:
+                If the state cannot be loaded.
         """
+
+        if not isinstance(state, dict):
+            raise ModelError(
+                f"Model '{self.name}' state must be a dict, "
+                f"got {type(state).__name__}."
+            )
 
         try:
             self._network.load_state_dict(
@@ -272,6 +406,10 @@ class BaseModel(ABC):
         Args:
             device:
                 Target PyTorch device.
+
+        Raises:
+            ModelError:
+                If the device conversion fails.
         """
 
         try:
