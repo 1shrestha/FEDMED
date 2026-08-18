@@ -1,12 +1,12 @@
 """
-Tests for the FedMed Phase 3.2 federated client.
+Tests for the FedMed Phase 3.2 FederatedClient.
 
 Covers:
 
 - Client construction and dependency validation
-- Client/model/Trainer/Evaluator consistency
+- Model / Trainer / Evaluator consistency
 - Parameter extraction and loading
-- Parameter contract enforcement
+- Phase 3.1 parameter-contract enforcement
 - Defensive parameter handling
 - Local training orchestration
 - Local evaluation orchestration
@@ -15,19 +15,23 @@ Covers:
 - Failure boundaries
 - Integration with the existing Phase 2 training/evaluation stack
 
-The FederatedClient is intentionally tested as an orchestration
-layer. The tests do not replace Trainer, Evaluator, DataLoader, or
-the Phase 3.1 parameter contract with duplicate implementations.
+The tests intentionally exercise the real FedMed components rather
+than replacing Trainer, Evaluator, DataLoader, or the parameter
+contract with duplicate implementations.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pytest
 import torch
 from torch import nn
 from torch.optim import SGD
+from torch.utils.data import Dataset
 
+from src.common.config import TrainingConfig
 from src.common.exceptions import FederatedLearningError
 from src.data.dataset import FedMedDataset
 from src.data.loader import create_dataloader
@@ -49,9 +53,7 @@ from src.training.trainer import Trainer
 
 
 class ClientTestModel(BaseModel):
-    """
-    Small deterministic classification model used for client tests.
-    """
+    """Small deterministic classification model for client tests."""
 
     def build(self) -> nn.Module:
         return nn.Sequential(
@@ -61,8 +63,26 @@ class ClientTestModel(BaseModel):
         )
 
 
+class EmptyDataset(Dataset):
+    """
+    Minimal zero-length PyTorch Dataset used exclusively to test
+    FederatedClient's empty-loader validation boundary.
+
+    FedMedDataset intentionally rejects empty datasets during its own
+    construction, so using a generic Dataset here allows the client
+    boundary to be tested independently without violating the Phase 1
+    dataset contract.
+    """
+
+    def __len__(self) -> int:
+        return 0
+
+    def __getitem__(self, index: int):
+        raise IndexError(index)
+
+
 # ============================================================
-# Fixtures / helpers
+# Fixtures
 # ============================================================
 
 
@@ -119,14 +139,28 @@ def eval_dataset() -> FedMedDataset:
 
 
 @pytest.fixture
+def train_config() -> TrainingConfig:
+    """Create the real Phase 2 TrainingConfig used by Trainer."""
+
+    return TrainingConfig(
+        local_epochs=1,
+        batch_size=4,
+        learning_rate=0.01,
+        optimizer="sgd",
+        seed=42,
+    )
+
+
+@pytest.fixture
 def train_loader(
     train_dataset: FedMedDataset,
+    train_config: TrainingConfig,
 ):
     """Create the local training DataLoader."""
 
     return create_dataloader(
         train_dataset,
-        batch_size=4,
+        batch_size=train_config.batch_size,
         shuffle=False,
     )
 
@@ -134,12 +168,13 @@ def train_loader(
 @pytest.fixture
 def eval_loader(
     eval_dataset: FedMedDataset,
+    train_config: TrainingConfig,
 ):
     """Create the local evaluation DataLoader."""
 
     return create_dataloader(
         eval_dataset,
-        batch_size=4,
+        batch_size=train_config.batch_size,
         shuffle=False,
     )
 
@@ -152,8 +187,10 @@ def criterion() -> nn.Module:
 
 
 @pytest.fixture
-def optimizer(model: ClientTestModel):
-    """Create the local optimizer."""
+def optimizer(
+    model: ClientTestModel,
+):
+    """Create an optimizer over the actual BaseModel parameters."""
 
     return SGD(
         model.parameters(),
@@ -166,14 +203,20 @@ def trainer(
     model: ClientTestModel,
     criterion: nn.Module,
     optimizer,
+    train_config: TrainingConfig,
 ):
-    """Create the existing Phase 2 Trainer."""
+    """
+    Create the existing Phase 2 Trainer.
+
+    Trainer receives local_epochs through TrainingConfig rather
+    than through its constructor.
+    """
 
     return Trainer(
         model=model,
         criterion=criterion,
         optimizer=optimizer,
-        epochs=1,
+        config=train_config,
     )
 
 
@@ -216,7 +259,9 @@ def client(
 # ============================================================
 
 
-def test_client_constructs_successfully(client: FederatedClient) -> None:
+def test_client_constructs_successfully(
+    client: FederatedClient,
+) -> None:
     """Verify a valid client can be constructed."""
 
     assert isinstance(client, FederatedClient)
@@ -227,7 +272,7 @@ def test_client_constructs_successfully(client: FederatedClient) -> None:
 def test_client_exposes_parameter_contract(
     client: FederatedClient,
 ) -> None:
-    """Verify the client exposes its immutable parameter contract."""
+    """Verify the client exposes its model parameter contract."""
 
     contract = client.parameter_contract
 
@@ -365,10 +410,10 @@ def test_client_allows_missing_eval_loader(
     evaluator: Evaluator,
     train_loader,
 ) -> None:
-    """Verify evaluation is optional at client construction."""
+    """Verify evaluation DataLoader is optional."""
 
     client = FederatedClient(
-        client_id="client-1",
+        client_id="client-without-eval",
         model=model,
         trainer=trainer,
         evaluator=evaluator,
@@ -383,6 +428,7 @@ def test_client_rejects_trainer_bound_to_different_model(
     criterion: nn.Module,
     evaluator: Evaluator,
     train_loader,
+    train_config: TrainingConfig,
 ) -> None:
     """Verify Trainer and client must use the same model instance."""
 
@@ -394,8 +440,11 @@ def test_client_rejects_trainer_bound_to_different_model(
     trainer = Trainer(
         model=other_model,
         criterion=criterion,
-        optimizer=SGD(other_model.parameters(), lr=0.01),
-        epochs=1,
+        optimizer=SGD(
+            other_model.parameters(),
+            lr=train_config.learning_rate,
+        ),
+        config=train_config,
     )
 
     with pytest.raises(FederatedLearningError):
@@ -437,21 +486,20 @@ def test_client_rejects_evaluator_bound_to_different_model(
         )
 
 
-def test_client_rejects_empty_training_dataset(
+def test_client_rejects_empty_training_loader(
     model: ClientTestModel,
     trainer: Trainer,
     evaluator: Evaluator,
-):
-    """Verify an empty local training dataset is rejected."""
+) -> None:
+    """
+    Verify the client rejects a zero-length training DataLoader.
 
-    dataset = FedMedDataset(
-        samples=torch.empty(0, 4),
-        targets=torch.empty(0, dtype=torch.long),
-        name="empty_train_dataset",
-    )
+    A generic PyTorch Dataset is intentionally used because
+    FedMedDataset rejects empty datasets at its own boundary.
+    """
 
-    loader = create_dataloader(
-        dataset,
+    empty_loader = torch.utils.data.DataLoader(
+        EmptyDataset(),
         batch_size=4,
     )
 
@@ -461,26 +509,25 @@ def test_client_rejects_empty_training_dataset(
             model=model,
             trainer=trainer,
             evaluator=evaluator,
-            train_loader=loader,
+            train_loader=empty_loader,
         )
 
 
-def test_client_rejects_empty_evaluation_dataset(
+def test_client_rejects_empty_evaluation_loader(
     model: ClientTestModel,
     trainer: Trainer,
     evaluator: Evaluator,
     train_loader,
-):
-    """Verify an empty evaluation dataset is rejected."""
+) -> None:
+    """
+    Verify the client rejects a zero-length evaluation DataLoader.
 
-    dataset = FedMedDataset(
-        samples=torch.empty(0, 4),
-        targets=torch.empty(0, dtype=torch.long),
-        name="empty_eval_dataset",
-    )
+    A generic PyTorch Dataset is intentionally used because
+    FedMedDataset rejects empty datasets at its own boundary.
+    """
 
-    loader = create_dataloader(
-        dataset,
+    empty_loader = torch.utils.data.DataLoader(
+        EmptyDataset(),
         batch_size=4,
     )
 
@@ -491,19 +538,19 @@ def test_client_rejects_empty_evaluation_dataset(
             trainer=trainer,
             evaluator=evaluator,
             train_loader=train_loader,
-            eval_loader=loader,
+            eval_loader=empty_loader,
         )
 
 
 # ============================================================
-# Parameters
+# Parameter handling
 # ============================================================
 
 
 def test_get_parameters_returns_valid_payload(
     client: FederatedClient,
 ) -> None:
-    """Verify get_parameters returns a valid NumPy payload."""
+    """Verify get_parameters returns a NumPy parameter payload."""
 
     parameters = client.get_parameters()
 
@@ -536,9 +583,7 @@ def test_get_parameters_matches_model(
 def test_get_parameters_is_defensive_copy(
     client: FederatedClient,
 ) -> None:
-    """
-    Verify modifying returned parameters does not modify model state.
-    """
+    """Verify returned arrays cannot mutate model state."""
 
     parameters = client.get_parameters()
     original = client.get_parameters()
@@ -557,7 +602,7 @@ def test_get_parameters_is_defensive_copy(
 def test_set_parameters_loads_global_parameters(
     client: FederatedClient,
 ) -> None:
-    """Verify global parameters are loaded into the client model."""
+    """Verify global parameters are loaded into the model."""
 
     original = client.get_parameters()
 
@@ -582,11 +627,12 @@ def test_set_parameters_does_not_retain_input_reference(
     client: FederatedClient,
 ) -> None:
     """
-    Verify modifying the caller's parameter arrays after set_parameters()
-    does not modify the client's model.
+    Verify modifying caller arrays after set_parameters() does not
+    mutate the client's model.
     """
 
     parameters = client.get_parameters()
+
     expected = [
         parameter.copy()
         for parameter in parameters
@@ -652,7 +698,7 @@ def test_set_parameters_rejects_dtype_mismatch(
 def test_set_parameters_rejects_nan(
     client: FederatedClient,
 ) -> None:
-    """Verify NaN model parameters are rejected."""
+    """Verify NaN parameters are rejected."""
 
     parameters = client.get_parameters()
 
@@ -676,14 +722,14 @@ def test_set_parameters_rejects_positive_infinity(
 
 
 # ============================================================
-# Fit
+# Local training / fit
 # ============================================================
 
 
 def test_fit_returns_federated_fit_result(
     client: FederatedClient,
 ) -> None:
-    """Verify fit returns the correct result type."""
+    """Verify fit returns the expected result type."""
 
     parameters = client.get_parameters()
 
@@ -695,7 +741,7 @@ def test_fit_returns_federated_fit_result(
 def test_fit_returns_updated_parameters(
     client: FederatedClient,
 ) -> None:
-    """Verify fit returns a complete updated parameter payload."""
+    """Verify fit returns a complete parameter payload."""
 
     parameters = client.get_parameters()
 
@@ -724,32 +770,44 @@ def test_fit_reports_correct_sample_count(
 
 def test_fit_reports_completed_epochs(
     client: FederatedClient,
+    train_config: TrainingConfig,
 ) -> None:
-    """Verify local epoch count is propagated."""
+    """Verify configured local epochs are propagated."""
 
     parameters = client.get_parameters()
 
     result = client.fit(parameters)
 
-    assert result.epochs_completed == 1
+    assert result.epochs_completed == train_config.local_epochs
 
 
 def test_fit_reports_processed_batches(
     client: FederatedClient,
+    train_dataset: FedMedDataset,
+    train_config: TrainingConfig,
 ) -> None:
-    """Verify local batch count is propagated."""
+    """Verify Trainer batch count is propagated."""
 
     parameters = client.get_parameters()
 
     result = client.fit(parameters)
 
-    assert result.batches_processed == 3
+    expected_batches_per_epoch = math.ceil(
+        len(train_dataset) / train_config.batch_size
+    )
+
+    expected_batches = (
+        expected_batches_per_epoch
+        * train_config.local_epochs
+    )
+
+    assert result.batches_processed == expected_batches
 
 
 def test_fit_reports_final_loss(
     client: FederatedClient,
 ) -> None:
-    """Verify final loss is propagated."""
+    """Verify final training loss is propagated."""
 
     parameters = client.get_parameters()
 
@@ -763,7 +821,7 @@ def test_fit_reports_final_loss(
 def test_fit_reports_training_metrics(
     client: FederatedClient,
 ) -> None:
-    """Verify training metrics contain the expected values."""
+    """Verify expected training metrics are exposed."""
 
     parameters = client.get_parameters()
 
@@ -789,7 +847,7 @@ def test_fit_reports_training_metrics(
 def test_fit_rejects_invalid_global_parameters(
     client: FederatedClient,
 ) -> None:
-    """Verify fit validates global parameters before training."""
+    """Verify fit validates parameters before local training."""
 
     parameters = client.get_parameters()
     parameters.pop()
@@ -801,7 +859,7 @@ def test_fit_rejects_invalid_global_parameters(
 def test_fit_does_not_mutate_input_parameters(
     client: FederatedClient,
 ) -> None:
-    """Verify fit does not mutate the caller's parameter payload."""
+    """Verify fit does not mutate the caller's parameter arrays."""
 
     parameters = client.get_parameters()
 
@@ -822,15 +880,35 @@ def test_fit_does_not_mutate_input_parameters(
         )
 
 
+def test_fit_updates_model_parameters(
+    client: FederatedClient,
+) -> None:
+    """Verify local training can change model parameters."""
+
+    initial = client.get_parameters()
+
+    result = client.fit(initial)
+
+    changed = any(
+        not np.array_equal(before, after)
+        for before, after in zip(
+            initial,
+            result.parameters,
+        )
+    )
+
+    assert changed
+
+
 # ============================================================
-# Evaluate
+# Local evaluation
 # ============================================================
 
 
 def test_evaluate_returns_federated_evaluate_result(
     client: FederatedClient,
 ) -> None:
-    """Verify evaluate returns the correct result type."""
+    """Verify evaluate returns the expected result type."""
 
     parameters = client.get_parameters()
 
@@ -843,7 +921,7 @@ def test_evaluate_reports_correct_sample_count(
     client: FederatedClient,
     eval_dataset: FedMedDataset,
 ) -> None:
-    """Verify evaluation sample count is propagated correctly."""
+    """Verify evaluation sample count is propagated."""
 
     parameters = client.get_parameters()
 
@@ -855,7 +933,7 @@ def test_evaluate_reports_correct_sample_count(
 def test_evaluate_reports_finite_loss(
     client: FederatedClient,
 ) -> None:
-    """Verify evaluation returns a finite non-negative loss."""
+    """Verify evaluation loss is finite and non-negative."""
 
     parameters = client.get_parameters()
 
@@ -876,14 +954,13 @@ def test_evaluate_reports_accuracy(
     result = client.evaluate(parameters)
 
     assert "accuracy" in result.metrics
-
     assert 0.0 <= result.metrics["accuracy"] <= 1.0
 
 
 def test_evaluate_rejects_invalid_global_parameters(
     client: FederatedClient,
 ) -> None:
-    """Verify evaluate validates global parameters before evaluation."""
+    """Verify evaluate validates parameters before evaluation."""
 
     parameters = client.get_parameters()
     parameters.pop()
@@ -898,7 +975,7 @@ def test_evaluate_requires_eval_loader(
     evaluator: Evaluator,
     train_loader,
 ) -> None:
-    """Verify evaluation fails clearly when no eval loader exists."""
+    """Verify evaluation requires an evaluation DataLoader."""
 
     client = FederatedClient(
         client_id="client-without-eval",
@@ -915,16 +992,15 @@ def test_evaluate_requires_eval_loader(
 
 
 # ============================================================
-# Fit / evaluate state behavior
+# Training / evaluation lifecycle
 # ============================================================
 
 
-def test_fit_then_evaluate_uses_updated_local_model(
+def test_fit_then_evaluate_uses_updated_model(
     client: FederatedClient,
 ) -> None:
     """
-    Verify the client can train and then evaluate the resulting
-    local model without reconstructing the client.
+    Verify a client can train and then evaluate its updated model.
     """
 
     parameters = client.get_parameters()
@@ -943,10 +1019,7 @@ def test_fit_then_evaluate_uses_updated_local_model(
 def test_client_can_load_new_global_parameters_and_evaluate(
     client: FederatedClient,
 ) -> None:
-    """
-    Verify a later global model can replace the client's local state
-    before evaluation.
-    """
+    """Verify a new global model can be evaluated locally."""
 
     original = client.get_parameters()
 
@@ -974,8 +1047,7 @@ def test_fit_result_parameters_are_defensive(
     client: FederatedClient,
 ) -> None:
     """
-    Verify mutating the returned FitResult parameter payload does not
-    mutate the client's model.
+    Verify mutating FitResult parameters does not mutate model state.
     """
 
     parameters = client.get_parameters()
@@ -1001,7 +1073,7 @@ def test_fit_result_parameters_are_defensive(
 def test_evaluate_metrics_are_independent_mapping(
     client: FederatedClient,
 ) -> None:
-    """Verify evaluation returns a fresh metric mapping."""
+    """Verify each evaluation returns an independent metric mapping."""
 
     parameters = client.get_parameters()
 
