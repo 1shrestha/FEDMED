@@ -12,6 +12,7 @@ This module is responsible for:
 - representing federated round lifecycle state
 - recording structured client failures
 - recording immutable round results
+- recording training and evaluation outcomes separately
 - carrying the result of one completed round
 - coordinating one federated round through injected dependencies
 
@@ -67,9 +68,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Mapping, Protocol, Sequence
-
-import numpy as np
+from typing import Mapping, Protocol, Sequence
 
 from src.common.exceptions import FederatedLearningError
 from src.fl.client import (
@@ -82,9 +81,6 @@ from src.fl.parameters import (
     copy_parameters,
     validate_parameters,
 )
-
-if TYPE_CHECKING:
-    from src.fl.parameters import ParameterContract
 
 
 # ============================================================
@@ -136,7 +132,7 @@ class RoundState(Enum):
     """
     Lifecycle state of one federated learning round.
 
-    A round progresses through the following normal lifecycle:
+    Normal lifecycle:
 
         CREATED
             |
@@ -149,18 +145,21 @@ class RoundState(Enum):
             v
         AGGREGATING
             |
-            +----------------+
-            |                |
-            v                v
-        EVALUATING       COMPLETED
+            v
+        EVALUATING
             |
             v
         COMPLETED
 
-    A round may transition to FAILED from an active state when a
-    fatal round-level condition occurs.
+    Evaluation is optional, so a round may also transition:
+
+        AGGREGATING
+            |
+            v
+        COMPLETED
 
     Terminal states:
+
         COMPLETED
         FAILED
     """
@@ -199,11 +198,21 @@ class ClientFailure:
         Round phase during which the client failed.
 
         Valid client-failure phases are:
+
             TRAINING
             EVALUATING
 
     error:
         Human-readable description of the failure.
+
+    Notes
+    -----
+    Evaluation failures are intentionally represented by the same
+    immutable failure type but stored separately inside
+    RoundResult.evaluation_failures.
+
+    This prevents a client that successfully trained but failed
+    evaluation from being classified as a training failure.
     """
 
     client_id: str
@@ -264,6 +273,8 @@ class RoundResult:
     The result contains round metadata and client-level outcomes.
     It deliberately does not own the server's global model state.
 
+    Training and evaluation outcomes are intentionally separated.
+
     Attributes
     ----------
     round_number:
@@ -279,32 +290,63 @@ class RoundResult:
         Client IDs whose training completed successfully.
 
     failed_clients:
-        Structured records for clients that failed.
+        Training failures only.
 
     fit_results:
         Successful local training results keyed by client ID.
 
     evaluation_results:
         Successful local evaluation results keyed by client ID.
+
+    evaluation_failures:
+        Evaluation failures only.
+
+    Important invariant
+    -------------------
+    A client that successfully completes training remains in
+    successful_clients even if that same client later fails
+    evaluation.
+
+    Therefore:
+
+        successful_clients ∩ failed_clients = ∅
+
+    while:
+
+        successful_clients
+            may intersect
+        evaluation_failures.client_id
     """
 
     round_number: int
     status: RoundState
+
     selected_clients: tuple[str, ...]
     successful_clients: tuple[str, ...]
+
     failed_clients: tuple[ClientFailure, ...]
+
     fit_results: Mapping[str, FederatedFitResult]
     evaluation_results: Mapping[str, FederatedEvaluateResult]
 
+    evaluation_failures: tuple[ClientFailure, ...] = ()
+
     def __post_init__(self) -> None:
         """Validate and freeze round result data."""
+
+        # ----------------------------------------------------
+        # Basic round validation
+        # ----------------------------------------------------
 
         if not isinstance(self.round_number, int):
             raise FederatedLearningError(
                 "RoundResult.round_number must be an integer."
             )
 
-        if isinstance(self.round_number, bool) or self.round_number < 1:
+        if (
+            isinstance(self.round_number, bool)
+            or self.round_number < 1
+        ):
             raise FederatedLearningError(
                 "RoundResult.round_number must be >= 1."
             )
@@ -314,9 +356,20 @@ class RoundResult:
                 "RoundResult.status must be a RoundState."
             )
 
+        # ----------------------------------------------------
+        # Normalize immutable sequence fields
+        # ----------------------------------------------------
+
         selected = tuple(self.selected_clients)
         successful = tuple(self.successful_clients)
         failures = tuple(self.failed_clients)
+        evaluation_failures = tuple(
+            self.evaluation_failures
+        )
+
+        # ----------------------------------------------------
+        # Validate client IDs
+        # ----------------------------------------------------
 
         self._validate_client_ids(
             selected,
@@ -328,15 +381,25 @@ class RoundResult:
             "successful_clients",
         )
 
+        # ----------------------------------------------------
+        # Duplicate selection validation
+        # ----------------------------------------------------
+
         if len(set(selected)) != len(selected):
             raise FederatedLearningError(
-                "RoundResult.selected_clients contains duplicate IDs."
+                "RoundResult.selected_clients contains "
+                "duplicate IDs."
             )
 
         if len(set(successful)) != len(successful):
             raise FederatedLearningError(
-                "RoundResult.successful_clients contains duplicate IDs."
+                "RoundResult.successful_clients contains "
+                "duplicate IDs."
             )
+
+        # ----------------------------------------------------
+        # Successful clients must have been selected
+        # ----------------------------------------------------
 
         selected_set = set(selected)
         successful_set = set(successful)
@@ -347,31 +410,66 @@ class RoundResult:
                 "selected_clients."
             )
 
-        failure_ids = [
-            failure.client_id
-            for failure in failures
-        ]
+        # ----------------------------------------------------
+        # Validate training failures
+        # ----------------------------------------------------
 
-        if len(set(failure_ids)) != len(failure_ids):
-            raise FederatedLearningError(
-                "RoundResult.failed_clients contains duplicate IDs."
+        training_failure_ids: list[str] = []
+
+        for failure in failures:
+            if not isinstance(failure, ClientFailure):
+                raise FederatedLearningError(
+                    "failed_clients must contain only "
+                    "ClientFailure objects."
+                )
+
+            if failure.phase is not RoundState.TRAINING:
+                raise FederatedLearningError(
+                    "failed_clients may contain only "
+                    "TRAINING failures."
+                )
+
+            training_failure_ids.append(
+                failure.client_id
             )
 
-        failure_set = set(failure_ids)
+        if len(set(training_failure_ids)) != len(
+            training_failure_ids
+        ):
+            raise FederatedLearningError(
+                "RoundResult.failed_clients contains "
+                "duplicate client IDs."
+            )
 
-        if not failure_set.issubset(selected_set):
+        training_failure_set = set(
+            training_failure_ids
+        )
+
+        if not training_failure_set.issubset(
+            selected_set
+        ):
             raise FederatedLearningError(
                 "Every failed client must be present in "
                 "selected_clients."
             )
 
-        if successful_set.intersection(failure_set):
+        # ----------------------------------------------------
+        # A client cannot both succeed and fail TRAINING
+        # ----------------------------------------------------
+
+        if successful_set.intersection(
+            training_failure_set
+        ):
             raise FederatedLearningError(
-                "A client cannot be both successful and failed."
+                "A client cannot be both successful and "
+                "failed."
             )
 
+        # ----------------------------------------------------
+        # Validate fit result mapping
+        # ----------------------------------------------------
+
         fit_results = dict(self.fit_results)
-        evaluation_results = dict(self.evaluation_results)
 
         if set(fit_results) != successful_set:
             raise FederatedLearningError(
@@ -379,12 +477,131 @@ class RoundResult:
                 "successful_clients."
             )
 
-        evaluation_client_ids = set(evaluation_results)
+        for client_id, result in fit_results.items():
+            if not isinstance(
+                client_id,
+                str,
+            ):
+                raise FederatedLearningError(
+                    "fit_results keys must be strings."
+                )
 
-        if not evaluation_client_ids.issubset(selected_set):
+            if not isinstance(
+                result,
+                FederatedFitResult,
+            ):
+                raise FederatedLearningError(
+                    "fit_results values must be "
+                    "FederatedFitResult objects."
+                )
+
+        # ----------------------------------------------------
+        # Validate evaluation results
+        # ----------------------------------------------------
+
+        evaluation_results = dict(
+            self.evaluation_results
+        )
+
+        evaluation_client_ids = set(
+            evaluation_results
+        )
+
+        if not evaluation_client_ids.issubset(
+            successful_set
+        ):
             raise FederatedLearningError(
-                "evaluation_results may only contain selected clients."
+                "evaluation_results may only contain "
+                "successfully trained clients."
             )
+
+        for client_id, result in (
+            evaluation_results.items()
+        ):
+            if not isinstance(
+                client_id,
+                str,
+            ):
+                raise FederatedLearningError(
+                    "evaluation_results keys must be "
+                    "strings."
+                )
+
+            if not isinstance(
+                result,
+                FederatedEvaluateResult,
+            ):
+                raise FederatedLearningError(
+                    "evaluation_results values must be "
+                    "FederatedEvaluateResult objects."
+                )
+
+        # ----------------------------------------------------
+        # Validate evaluation failures
+        # ----------------------------------------------------
+
+        evaluation_failure_ids: list[str] = []
+
+        for failure in evaluation_failures:
+            if not isinstance(
+                failure,
+                ClientFailure,
+            ):
+                raise FederatedLearningError(
+                    "evaluation_failures must contain only "
+                    "ClientFailure objects."
+                )
+
+            if failure.phase is not RoundState.EVALUATING:
+                raise FederatedLearningError(
+                    "evaluation_failures may contain only "
+                    "EVALUATING failures."
+                )
+
+            evaluation_failure_ids.append(
+                failure.client_id
+            )
+
+        if len(set(evaluation_failure_ids)) != len(
+            evaluation_failure_ids
+        ):
+            raise FederatedLearningError(
+                "evaluation_failures contains duplicate "
+                "client IDs."
+            )
+
+        evaluation_failure_set = set(
+            evaluation_failure_ids
+        )
+
+        # ----------------------------------------------------
+        # Evaluation failures must be selected clients
+        # ----------------------------------------------------
+
+        if not evaluation_failure_set.issubset(
+            selected_set
+        ):
+            raise FederatedLearningError(
+                "Every evaluation failure client must be "
+                "present in selected_clients."
+            )
+
+        # ----------------------------------------------------
+        # A client cannot have both evaluation result and
+        # evaluation failure.
+        # ----------------------------------------------------
+
+        if evaluation_client_ids.intersection(
+            evaluation_failure_set
+        ):
+            raise FederatedLearningError(
+                "A client cannot have both an evaluation "
+                "result and an evaluation failure."
+            )
+
+        # ----------------------------------------------------
+        # Freeze normalized data
+        # ----------------------------------------------------
 
         object.__setattr__(
             self,
@@ -406,14 +623,24 @@ class RoundResult:
 
         object.__setattr__(
             self,
+            "evaluation_failures",
+            evaluation_failures,
+        )
+
+        object.__setattr__(
+            self,
             "fit_results",
-            MappingProxyType(fit_results),
+            MappingProxyType(
+                fit_results
+            ),
         )
 
         object.__setattr__(
             self,
             "evaluation_results",
-            MappingProxyType(evaluation_results),
+            MappingProxyType(
+                evaluation_results
+            ),
         )
 
     @staticmethod
@@ -424,14 +651,19 @@ class RoundResult:
         """Validate a tuple of client identifiers."""
 
         for client_id in client_ids:
-            if not isinstance(client_id, str):
+            if not isinstance(
+                client_id,
+                str,
+            ):
                 raise FederatedLearningError(
-                    f"{field_name} must contain only strings."
+                    f"{field_name} must contain only "
+                    "strings."
                 )
 
             if not client_id.strip():
                 raise FederatedLearningError(
-                    f"{field_name} cannot contain empty client IDs."
+                    f"{field_name} cannot contain empty "
+                    "client IDs."
                 )
 
 
@@ -456,31 +688,32 @@ class RoundExecution:
 
     The server consumes aggregated_parameters and updates its
     global model state.
-
-    Attributes
-    ----------
-    result:
-        Immutable round outcome.
-
-    aggregated_parameters:
-        New global model parameters produced after successful
-        aggregation.
     """
 
     result: RoundResult
     aggregated_parameters: ParameterPayload
 
     def __post_init__(self) -> None:
-        """Validate and defensively copy the aggregated parameters."""
+        """Validate and defensively copy aggregated parameters."""
 
-        if not isinstance(self.result, RoundResult):
+        if not isinstance(
+            self.result,
+            RoundResult,
+        ):
             raise FederatedLearningError(
                 "RoundExecution.result must be a RoundResult."
             )
 
-        copied = copy_parameters(
-            self.aggregated_parameters,
-        )
+        try:
+            copied = copy_parameters(
+                self.aggregated_parameters,
+            )
+
+        except Exception as exc:
+            raise FederatedLearningError(
+                "RoundExecution.aggregated_parameters "
+                "could not be copied."
+            ) from exc
 
         object.__setattr__(
             self,
@@ -499,33 +732,25 @@ class RoundCoordinator:
     Reusable coordinator for executing one federated round.
 
     The coordinator is deliberately stateless with respect to
-    federation progress. FederatedServer owns:
+    federation progress.
+
+    FederatedServer owns:
 
         - global parameters
         - current round number
         - round history
         - long-lived federation state
 
-    RoundCoordinator owns the lifecycle of an individual round.
+    RoundCoordinator owns:
 
-    Dependencies
-    ------------
-    strategy:
-        Strategy implementation responsible for client selection
-        and aggregation policy.
-
-    clients:
-        Registered federated clients keyed by stable client ID.
+        - client selection boundary
+        - local training coordination
+        - aggregation coordination
+        - optional evaluation coordination
+        - round result construction
 
     The coordinator does not directly implement a specific
     aggregation algorithm.
-
-    Notes
-    -----
-    The public FederatedStrategy contract is finalized in
-    Phase 3.3-B. This module therefore uses a private structural
-    protocol so the round implementation can be developed without
-    coupling it to a concrete strategy implementation.
     """
 
     def __init__(
@@ -552,30 +777,41 @@ class RoundCoordinator:
                 "RoundCoordinator requires a strategy."
             )
 
-        if not isinstance(clients, Mapping):
+        if not isinstance(
+            clients,
+            Mapping,
+        ):
             raise FederatedLearningError(
                 "RoundCoordinator.clients must be a mapping."
             )
 
         normalized_clients = dict(clients)
 
-        self._validate_clients(normalized_clients)
+        self._validate_clients(
+            normalized_clients,
+        )
 
         self._strategy = strategy
-        self._clients = MappingProxyType(normalized_clients)
+        self._clients = MappingProxyType(
+            normalized_clients
+        )
 
     # ========================================================
     # Public properties
     # ========================================================
 
     @property
-    def clients(self) -> Mapping[str, FederatedClient]:
-        """Return the registered clients as a read-only mapping."""
+    def clients(
+        self,
+    ) -> Mapping[str, FederatedClient]:
+        """Return registered clients as a read-only mapping."""
 
         return self._clients
 
     @property
-    def strategy(self) -> _RoundStrategyProtocol:
+    def strategy(
+        self,
+    ) -> _RoundStrategyProtocol:
         """Return the configured federation strategy."""
 
         return self._strategy
@@ -608,52 +844,54 @@ class RoundCoordinator:
                 ↓
             COMPLETED
 
-        Expected client-level federated failures are recorded as
-        ClientFailure objects. The strategy is responsible for
-        determining how many successful updates are required for
-        aggregation.
+        Training failures and evaluation failures are tracked
+        separately.
 
-        Parameters
-        ----------
-        round_number:
-            One-based federated round number.
+        Training failure:
 
-        parameters:
-            Current global parameter payload.
+            failed_clients
 
-        evaluate:
-            Whether local client evaluation should be executed after
-            successful aggregation.
+        Evaluation failure:
 
-            Evaluation policy will be finalized in Phase 3.3-B.
-            This explicit execution flag keeps the round contract
-            usable without embedding a policy into rounds.py.
+            evaluation_failures
 
-        Returns
-        -------
-        RoundExecution
-            Round result plus the newly aggregated global parameters.
-
-        Raises
-        ------
-        FederatedLearningError
-            If a fatal round-level condition occurs.
+        A successful training client therefore remains a
+        successful training client even if evaluation later fails.
         """
 
-        self._validate_round_number(round_number)
+        self._validate_round_number(
+            round_number,
+        )
 
-        self._validate_global_parameters(parameters)
+        self._validate_global_parameters(
+            parameters,
+        )
 
         state = RoundState.CREATED
 
         selected_clients: tuple[str, ...] = ()
+
         successful_clients: tuple[str, ...] = ()
+
+        # Training failures only.
         failures: list[ClientFailure] = []
-        fit_results: dict[str, FederatedFitResult] = {}
+
+        # Successful local training results.
+        fit_results: dict[
+            str,
+            FederatedFitResult,
+        ] = {}
+
+        # Successful local evaluation results.
         evaluation_results: dict[
             str,
             FederatedEvaluateResult,
         ] = {}
+
+        # Evaluation failures only.
+        evaluation_failures: list[
+            ClientFailure
+        ] = []
 
         try:
             # ------------------------------------------------
@@ -662,13 +900,19 @@ class RoundCoordinator:
 
             state = RoundState.SELECTING
 
-            selected = self._strategy.select_fit_clients(
-                tuple(self._clients.values()),
-                round_number,
+            selected = (
+                self._strategy.select_fit_clients(
+                    tuple(
+                        self._clients.values()
+                    ),
+                    round_number,
+                )
             )
 
-            selected_clients = self._normalize_selected_clients(
-                selected,
+            selected_clients = (
+                self._normalize_selected_clients(
+                    selected,
+                )
             )
 
             self._validate_selection(
@@ -682,10 +926,14 @@ class RoundCoordinator:
             state = RoundState.TRAINING
 
             for client_id in selected_clients:
-                client = self._clients[client_id]
+                client = self._clients[
+                    client_id
+                ]
 
                 try:
-                    result = client.fit(parameters)
+                    result = client.fit(
+                        parameters,
+                    )
 
                 except FederatedLearningError as exc:
                     failures.append(
@@ -699,19 +947,27 @@ class RoundCoordinator:
 
                 except Exception as exc:
                     raise FederatedLearningError(
-                        f"Unexpected failure while executing "
-                        f"training for client '{client_id}': {exc}"
+                        "Unexpected failure while "
+                        "executing training for client "
+                        f"'{client_id}': {exc}"
                     ) from exc
 
-                if not isinstance(result, FederatedFitResult):
+                if not isinstance(
+                    result,
+                    FederatedFitResult,
+                ):
                     raise FederatedLearningError(
-                        f"Client '{client_id}' returned an invalid "
-                        "FederatedFitResult."
+                        f"Client '{client_id}' returned "
+                        "an invalid FederatedFitResult."
                     )
 
-                fit_results[client_id] = result
+                fit_results[
+                    client_id
+                ] = result
 
-            successful_clients = tuple(fit_results)
+            successful_clients = tuple(
+                fit_results
+            )
 
             # ------------------------------------------------
             # Minimum participation
@@ -719,8 +975,9 @@ class RoundCoordinator:
 
             if not successful_clients:
                 raise FederatedLearningError(
-                    f"Round {round_number} produced no successful "
-                    "client training results."
+                    f"Round {round_number} produced "
+                    "no successful client training "
+                    "results."
                 )
 
             # ------------------------------------------------
@@ -729,12 +986,22 @@ class RoundCoordinator:
 
             state = RoundState.AGGREGATING
 
-            aggregated_parameters = (
-                self._strategy.aggregate_fit(
-                    fit_results,
-                    round_number,
+            try:
+                aggregated_parameters = (
+                    self._strategy.aggregate_fit(
+                        fit_results,
+                        round_number,
+                    )
                 )
-            )
+
+            except FederatedLearningError:
+                raise
+
+            except Exception as exc:
+                raise FederatedLearningError(
+                    f"Unexpected aggregation failure "
+                    f"in round {round_number}: {exc}"
+                ) from exc
 
             self._validate_aggregated_parameters(
                 aggregated_parameters,
@@ -750,7 +1017,9 @@ class RoundCoordinator:
 
                 evaluation_clients = (
                     self._strategy.select_evaluate_clients(
-                        tuple(self._clients.values()),
+                        tuple(
+                            self._clients.values()
+                        ),
                         round_number,
                     )
                 )
@@ -761,8 +1030,16 @@ class RoundCoordinator:
                     )
                 )
 
+                # Evaluation selection is also a registered
+                # client selection boundary.
+                self._validate_evaluation_selection(
+                    evaluation_ids,
+                )
+
                 for client_id in evaluation_ids:
-                    client = self._clients[client_id]
+                    client = self._clients[
+                        client_id
+                    ]
 
                     try:
                         result = client.evaluate(
@@ -770,7 +1047,15 @@ class RoundCoordinator:
                         )
 
                     except FederatedLearningError as exc:
-                        failures.append(
+                        # IMPORTANT:
+                        #
+                        # This is NOT appended to `failures`
+                        # because `failures` represents training
+                        # failures.
+                        #
+                        # A client may successfully train and then
+                        # fail evaluation.
+                        evaluation_failures.append(
                             ClientFailure(
                                 client_id=client_id,
                                 phase=RoundState.EVALUATING,
@@ -781,9 +1066,9 @@ class RoundCoordinator:
 
                     except Exception as exc:
                         raise FederatedLearningError(
-                            f"Unexpected failure while executing "
-                            f"evaluation for client "
-                            f"'{client_id}': {exc}"
+                            "Unexpected failure while "
+                            "executing evaluation for "
+                            f"client '{client_id}': {exc}"
                         ) from exc
 
                     if not isinstance(
@@ -791,11 +1076,14 @@ class RoundCoordinator:
                         FederatedEvaluateResult,
                     ):
                         raise FederatedLearningError(
-                            f"Client '{client_id}' returned an invalid "
+                            f"Client '{client_id}' returned "
+                            "an invalid "
                             "FederatedEvaluateResult."
                         )
 
-                    evaluation_results[client_id] = result
+                    evaluation_results[
+                        client_id
+                    ] = result
 
             # ------------------------------------------------
             # Complete
@@ -808,21 +1096,31 @@ class RoundCoordinator:
                 status=state,
                 selected_clients=selected_clients,
                 successful_clients=successful_clients,
-                failed_clients=tuple(failures),
+                failed_clients=tuple(
+                    failures
+                ),
                 fit_results=fit_results,
-                evaluation_results=evaluation_results,
+                evaluation_results=(
+                    evaluation_results
+                ),
+                evaluation_failures=tuple(
+                    evaluation_failures
+                ),
             )
 
             return RoundExecution(
                 result=result,
-                aggregated_parameters=aggregated_parameters,
+                aggregated_parameters=(
+                    aggregated_parameters
+                ),
             )
 
         except FederatedLearningError:
-            # The coordinator intentionally does not manufacture a
-            # RoundResult for a fatal exception. The server/failure
-            # policy layer will decide whether to retry, abort, or
-            # persist the failed-round state.
+            # The coordinator intentionally does not manufacture
+            # a RoundResult for a fatal exception.
+            #
+            # The server/failure-policy layer will decide whether
+            # to retry, abort, or persist failed-round state.
             raise
 
         except Exception as exc:
@@ -847,26 +1145,35 @@ class RoundCoordinator:
             )
 
         for client_id, client in clients.items():
-            if not isinstance(client_id, str):
+            if not isinstance(
+                client_id,
+                str,
+            ):
                 raise FederatedLearningError(
                     "Client registry keys must be strings."
                 )
 
             if not client_id.strip():
                 raise FederatedLearningError(
-                    "Client registry contains an empty client ID."
+                    "Client registry contains an empty "
+                    "client ID."
                 )
 
-            if not isinstance(client, FederatedClient):
+            if not isinstance(
+                client,
+                FederatedClient,
+            ):
                 raise FederatedLearningError(
-                    f"Client '{client_id}' must be a FederatedClient, "
+                    f"Client '{client_id}' must be a "
+                    "FederatedClient, "
                     f"got {type(client).__name__}."
                 )
 
             if client.client_id != client_id:
                 raise FederatedLearningError(
-                    "Client registry key does not match the client's "
-                    f"own ID: key='{client_id}', "
+                    "Client registry key does not match "
+                    "the client's own ID: "
+                    f"key='{client_id}', "
                     f"client_id='{client.client_id}'."
                 )
 
@@ -876,12 +1183,18 @@ class RoundCoordinator:
     ) -> None:
         """Validate the one-based round number."""
 
-        if not isinstance(round_number, int):
+        if not isinstance(
+            round_number,
+            int,
+        ):
             raise FederatedLearningError(
                 "round_number must be an integer."
             )
 
-        if isinstance(round_number, bool) or round_number < 1:
+        if (
+            isinstance(round_number, bool)
+            or round_number < 1
+        ):
             raise FederatedLearningError(
                 "round_number must be >= 1."
             )
@@ -891,11 +1204,8 @@ class RoundCoordinator:
         parameters: ParameterPayload,
     ) -> None:
         """
-        Validate the incoming global parameters against every
+        Validate incoming global parameters against every
         registered client's parameter contract.
-
-        This ensures that the server cannot start a round with a
-        parameter payload incompatible with one of its clients.
 
         Detailed validation remains centralized in Phase 3.1.
         """
@@ -906,16 +1216,24 @@ class RoundCoordinator:
                     parameters,
                     client.parameter_contract,
                 )
+
             except Exception as exc:
-                if isinstance(exc, FederatedLearningError):
+                if isinstance(
+                    exc,
+                    FederatedLearningError,
+                ):
                     raise FederatedLearningError(
-                        "Global parameter validation failed for "
-                        f"client '{client.client_id}': {exc}"
+                        "Global parameter validation "
+                        "failed for "
+                        f"client '{client.client_id}': "
+                        f"{exc}"
                     ) from exc
 
                 raise FederatedLearningError(
-                    "Unexpected global parameter validation failure "
-                    f"for client '{client.client_id}': {exc}"
+                    "Unexpected global parameter "
+                    "validation failure for "
+                    f"client '{client.client_id}': "
+                    f"{exc}"
                 ) from exc
 
     def _validate_aggregated_parameters(
@@ -924,44 +1242,55 @@ class RoundCoordinator:
         successful_clients: Sequence[str],
     ) -> None:
         """
-        Validate the aggregated parameter payload against the
-        successful clients' parameter contracts.
+        Validate aggregated parameters against the successful
+        clients' parameter contracts.
 
-        Aggregation itself belongs to the Aggregator/Strategy layer.
-        This method only verifies the returned payload.
+        Aggregation itself belongs to the Strategy/Aggregation
+        layer. This method only verifies the returned payload.
         """
 
         if not successful_clients:
             raise FederatedLearningError(
-                "Cannot validate aggregated parameters without "
-                "successful clients."
+                "Cannot validate aggregated parameters "
+                "without successful clients."
             )
 
         for client_id in successful_clients:
-            client = self._clients[client_id]
+            client = self._clients[
+                client_id
+            ]
 
             try:
                 validate_parameters(
                     parameters,
                     client.parameter_contract,
                 )
+
             except Exception as exc:
-                if isinstance(exc, FederatedLearningError):
+                if isinstance(
+                    exc,
+                    FederatedLearningError,
+                ):
                     raise FederatedLearningError(
-                        "Aggregated parameter validation failed for "
+                        "Aggregated parameter validation "
+                        "failed for "
                         f"client '{client_id}': {exc}"
                     ) from exc
 
                 raise FederatedLearningError(
-                    "Unexpected aggregated parameter validation "
-                    f"failure for client '{client_id}': {exc}"
+                    "Unexpected aggregated parameter "
+                    "validation failure for "
+                    f"client '{client_id}': {exc}"
                 ) from exc
 
     def _validate_selection(
         self,
         selected_clients: tuple[str, ...],
     ) -> None:
-        """Validate that strategy selection references registered clients."""
+        """
+        Validate that training selection references registered
+        clients.
+        """
 
         if not selected_clients:
             raise FederatedLearningError(
@@ -980,6 +1309,33 @@ class RoundCoordinator:
                 + ", ".join(unknown_clients)
             )
 
+    def _validate_evaluation_selection(
+        self,
+        selected_clients: tuple[str, ...],
+    ) -> None:
+        """
+        Validate evaluation client selection.
+
+        Evaluation selection is allowed to be empty because the
+        strategy may intentionally choose not to evaluate any
+        client in a particular round.
+
+        Unknown clients are never allowed.
+        """
+
+        unknown_clients = [
+            client_id
+            for client_id in selected_clients
+            if client_id not in self._clients
+        ]
+
+        if unknown_clients:
+            raise FederatedLearningError(
+                "Strategy selected unknown clients for "
+                "evaluation: "
+                + ", ".join(unknown_clients)
+            )
+
     def _normalize_selected_clients(
         self,
         clients: Sequence[FederatedClient],
@@ -991,25 +1347,35 @@ class RoundCoordinator:
         coordinator retains the existing client abstraction.
         """
 
-        if not isinstance(clients, Sequence):
+        if not isinstance(
+            clients,
+            Sequence,
+        ):
             raise FederatedLearningError(
-                "Strategy client selection must return a sequence "
-                "of FederatedClient objects."
+                "Strategy client selection must return "
+                "a sequence of FederatedClient objects."
             )
 
         client_ids: list[str] = []
 
         for client in clients:
-            if not isinstance(client, FederatedClient):
+            if not isinstance(
+                client,
+                FederatedClient,
+            ):
                 raise FederatedLearningError(
-                    "Strategy selection must contain only "
-                    "FederatedClient objects, got "
+                    "Strategy selection must contain "
+                    "only FederatedClient objects, got "
                     f"{type(client).__name__}."
                 )
 
-            client_ids.append(client.client_id)
+            client_ids.append(
+                client.client_id
+            )
 
-        if len(set(client_ids)) != len(client_ids):
+        if len(set(client_ids)) != len(
+            client_ids
+        ):
             raise FederatedLearningError(
                 "Strategy selected duplicate clients."
             )
