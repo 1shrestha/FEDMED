@@ -111,7 +111,7 @@ class StubTrainer(Trainer):
         # Deterministically overwrite model state so the integration
         # test produces known client-specific parameters.
         with torch.no_grad():
-            for parameter in self._model.module.parameters():
+            for parameter in self._model.network.parameters():
                 parameter.fill_(self.value)
 
         return TrainingResult(
@@ -992,14 +992,14 @@ def test_strategy_integrates_with_round_coordinator() -> None:
     #
     # Their deterministic trainer values are 1 and 3:
     #
-    # global = 0.25 * 1 + 0.75 * 3 = 2
+    # global = 0.25 * 1 + 0.75 * 3 = 2.5
 
     for parameter in execution.aggregated_parameters:
         np.testing.assert_allclose(
             parameter,
             np.full_like(
                 parameter,
-                2.0,
+                2.5,
             ),
             rtol=1e-5,
             atol=1e-5,
