@@ -1,4 +1,4 @@
-"""Utility: queries GetNodeStatus and prints the registry — handy for
+"""Utility: queries GetNodeStatus and prints registry — handy for
 manually verifying the Week 1 deliverable ("3 dummy nodes appear in
 GetNodeStatus")."""
 
