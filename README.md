@@ -1,85 +1,164 @@
-# FedMed — Week 1: Node Communication Skeleton
+# FedMed Security Module
 
-Distributed-systems control-plane for FedMed. This week proves out node
-registration, discovery, and heartbeat over gRPC between the central
-server and simulated hospital nodes — the foundation the rest of the
-resilience/orchestration work (Weeks 2–4) builds on.
+A production-grade security and cryptography infrastructure for the **FedMed** federated learning platform, enabling privacy-preserving collaborative model training across hospital nodes without sharing raw patient data.
 
-## What's here
+## 🏗️ Module Structure
 
 ```
-proto/                    # shared .proto contracts (source of truth)
-  node_service.proto       #   RegisterNode, Heartbeat, GetNodeStatus
-  training_control.proto   #   NotifyRoundStart, SubmitUpdateAck (control signals only —
-                            #   actual model weights flow through Flower, not this service)
-server/                   # central control-plane gRPC server
-  server.py
-  registry.py              # in-memory node registry (Postgres-backed from Week 3)
-client_node/               # simulated hospital node
-  client.py                 # registers + heartbeats on a loop
-  check_status.py           # manual utility: prints GetNodeStatus table
-scripts/
-  generate_protos.sh        # regenerate *_pb2.py / *_pb2_grpc.py after editing protos
-docker-compose.yml          # server + 3 simulated hospitals
+fedmed/
+├── .gitignore                       # Excludes certs, .venv, __pycache__
+├── requirements.txt                 # All pinned Python dependencies
+├── certs/                           # Generated TLS certs (gitignored)
+│   └── .gitkeep
+├── scripts/
+│   └── gen_certs.py                 # Self-signed CA + cert generator
+├── docs/
+│   ├── adr-001-library-selection.md # Architecture Decision Record 1
+│   ├── adr-002-ecdh-hkdf.md         # Architecture Decision Record 2
+│   ├── secagg-protocol-notes.md     # SecAgg protocol study notes
+│   └── threat-model-poisoning.md    # Byzantine/poisoning threat model
+└── security/
+    ├── __init__.py                  # Public API re-export
+    ├── grpc_tls.py                  # mTLS credential loaders
+    ├── crypto_utils.py              # ECDSA, ECDH, AES-GCM, PRG
+    ├── secagg.py                    # 4-round Secure Aggregation protocol
+    ├── defenses.py                  # Byzantine-robust aggregation rules
+    └── tests/
+        ├── test_grpc_tls.py
+        ├── test_crypto_utils.py
+        ├── test_secagg.py
+        └── test_defenses.py
 ```
 
-## Run it locally (no Docker)
+---
 
-```bash
-# one-time, or after editing any .proto file
-./scripts/generate_protos.sh
+## ⚡ Quick Start
 
-# terminal 1
-cd server && pip install -r requirements.txt && python3 server.py
+### 1. Install dependencies
 
-# terminal 2, 3, 4 — one simulated hospital each
-cd client_node && pip install -r requirements.txt
-NODE_ID=hospital-a HOSPITAL_NAME="Hospital A" DATASET_SIZE=1000 python3 client.py
-NODE_ID=hospital-b HOSPITAL_NAME="Hospital B" DATASET_SIZE=800  python3 client.py
-NODE_ID=hospital-c HOSPITAL_NAME="Hospital C" DATASET_SIZE=1200 python3 client.py
-
-# terminal 5 — check the registry
-cd client_node && python3 check_status.py
+```powershell
+pip install -r requirements.txt
 ```
 
-## Run it with Docker Compose (the actual Week 1 deliverable)
+### 2. Generate TLS certificates (local dev)
 
-```bash
-docker compose up --build
+```powershell
+python scripts/gen_certs.py --clients 3
 ```
 
-This brings up the server plus 3 simulated hospital containers (`hospital-a/b/c`),
-each registering and heartbeating automatically. Confirm the deliverable with:
-
-```bash
-docker compose exec hospital-a python3 check_status.py
-```
-
-Expected output — all three nodes listed as `ACTIVE`:
+Outputs to `certs/`:
 
 ```
-node_id       hospital      state     dataset_size
-hospital-a    Hospital A    ACTIVE    1000
-hospital-b    Hospital B    ACTIVE    800
-hospital-c    Hospital C    ACTIVE    1200
+ca.pem / ca.key
+server.pem / server.key
+client_0.pem / client_0.key  (× N)
 ```
 
-## Design notes for the team
+### 3. Run the test suite
 
-- **Why a separate control-plane service from Flower:** Flower already runs its
-  own gRPC channel for the FL training loop (weight exchange). This service is a
-  thin layer *around* that — node lifecycle, discovery, and round-start signaling —
-  so orchestration/resilience logic stays decoupled from the ML framework internals.
-- **NodeState (ACTIVE/SUSPECT/DEAD):** currently computed from heartbeat recency
-  in `registry.py`. Week 3 wires this into failure detection and round-exclusion logic.
-- **Retry stub in `client.py`:** `connect_with_retry()` is a placeholder for the
-  proper exponential-backoff + circuit-breaker interceptor coming in Week 3 — it's
-  intentionally simple for now so Week 1 stays focused on the happy path.
-- **In-memory registry:** fine for Week 1 demo; becomes a bug the moment the server
-  restarts mid-round. Flagged for the Postgres-backed rewrite in Week 3.
+```powershell
+python -m unittest discover -s security/tests -v
+```
 
-## Next (Week 2 preview)
+---
 
-Wire `NotifyRoundStart` into an actual round-lifecycle state machine on the
-server (`IDLE → ROUND_STARTING → WAITING_FOR_UPDATES → AGGREGATING → ROUND_COMPLETE`),
-and have nodes react to it instead of the server just logging the call.
+## 🔐 Security Components
+
+### [`security/grpc_tls.py`](security/grpc_tls.py) — Mutual TLS
+
+Provides `grpc.ServerCredentials` and `grpc.ChannelCredentials` for enforcing mTLS on all gRPC channels between the Flower server and hospital clients.
+
+```python
+from security import load_server_credentials, load_channel_credentials
+
+# On the FL server
+server_creds = load_server_credentials("certs")
+grpc_server.add_secure_port("0.0.0.0:8080", server_creds)
+
+# On each hospital client
+channel_creds = load_channel_credentials("certs", client_id=0)
+channel = grpc.secure_channel("fl-server:8080", channel_creds)
+```
+
+### [`security/crypto_utils.py`](security/crypto_utils.py) — Cryptographic Primitives
+
+| Function | Algorithm | Purpose |
+|----------|-----------|---------|
+| `generate_ecdsa_keypair()` | ECDSA NIST P-256 | Key pair generation |
+| `sign_update(priv, data)` | ECDSA-SHA256 | Authenticate model updates |
+| `verify_update(pub, data, sig)` | ECDSA-SHA256 | Server-side update verification |
+| `dh_exchange(priv, peer_pub)` | ECDH + HKDF-SHA256 | Pairwise mask seed derivation |
+| `aes_gcm_encrypt(key, pt)` | AES-256-GCM | Metadata / audit encryption |
+| `prg_mask(seed, shape)` | SHA-256 counter mode | Deterministic mask generation |
+
+### [`security/secagg.py`](security/secagg.py) — Secure Aggregation
+
+4-round masking protocol (Bonawitz et al., 2017). The server **never sees** plaintext model updates.
+
+```python
+from security import SecAggCoordinator, SecAggClient
+
+# Each FL client
+client = SecAggClient(client_id=0, n_clients=5, threshold=3)
+bundle  = client.generate_keys()          # Round 1
+client.receive_peer_keys(all_bundles)     # Round 2
+masked  = client.mask_update(local_grad)  # Round 3
+
+# FL server / Flower strategy
+coord = SecAggCoordinator(n_clients=5, averaging_fn=go_averaging_rpc)
+coord.round1_collect_keys(bundles)
+coord.round2_distribute_keys()
+coord.round3_collect_masked_updates(masked_updates)
+aggregate = coord.round4_unmask(dropout_ids, dropout_shares)
+```
+
+> The `averaging_fn` hook is how the **Go-based aggregation service** plugs in.
+
+### [`security/defenses.py`](security/defenses.py) — Byzantine-Robust Aggregation
+
+| Function | Breakdown Point | Best Against |
+|----------|----------------|-------------|
+| `trimmed_mean(updates, trim_ratio)` | floor(n × ratio) clients | Scaling attacks |
+| `coordinate_median(updates)` | ~50% of clients | Any outlier attack |
+| `krum(updates, f)` | f < (n−2)/2 | Targeted poisoning |
+| `multi_krum(updates, f, m)` | f < (n−2)/2 | Poisoning + variance |
+
+---
+
+## 🔑 Key Management
+
+| Environment | Key Storage |
+|-------------|-------------|
+| **Local dev** | `certs/` directory (auto-generated by `gen_certs.py`) |
+| **Production** | HSM / HashiCorp Vault PKI engine |
+
+> ⚠️ **Never commit** `*.pem`, `*.key`, or `*.env` files. The `.gitignore` covers these.
+
+---
+
+## 🧪 Test Coverage
+
+| Module | Tests | Key Assertions |
+|--------|-------|---------------|
+| `grpc_tls.py` | 8 | Cert loading, chain verification, expiry |
+| `crypto_utils.py` | 18 | Sign/verify, DH agreement, AES-GCM auth |
+| `secagg.py` | 14 | Shamir SSS, full 4-round, dropout recovery |
+| `defenses.py` | 20+ | Correctness + Byzantine resilience |
+
+---
+
+## 🗺️ Architecture Decisions
+
+- [ADR-001: Library Selection](docs/adr-001-library-selection.md)
+- [ADR-002: ECDH + HKDF Key Derivation](docs/adr-002-ecdh-hkdf.md)
+- [SecAgg Protocol Notes](docs/secagg-protocol-notes.md)
+- [Threat Model — Poisoning Attacks](docs/threat-model-poisoning.md)
+
+---
+
+## 📌 Production Checklist
+
+- [ ] Replace `averaging_fn` with Go gRPC aggregation service stub
+- [ ] Wire `SecAggCoordinator` into Flower `Strategy` overrides
+- [ ] Replace `certs/` loader with HashiCorp Vault PKI for hospital nodes
+- [ ] Add `python -m unittest discover -s security/tests -v` to CI pipeline
