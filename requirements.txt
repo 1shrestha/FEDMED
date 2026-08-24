@@ -11,5 +11,8 @@ PyYAML
 # Deep learning
 torch
 
+# Federated learning runtime
+flwr==1.34.0
+
 # Testing
 pytest
