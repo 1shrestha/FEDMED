@@ -7,4 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["python3", "-u", "client.py"]
+EXPOSE 50051
+
+CMD ["python3", "server.py"]
