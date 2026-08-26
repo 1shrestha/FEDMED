@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  server:
+    build: ./server
+    ports:
+      - "50051:50051"
+    networks:
+      - fedmed-net
+
+  hospital-a:
+    build: ./client_node
+    depends_on:
+      - server
+    environment:
+      SERVER_ADDR: server:50051
+      NODE_ID: hospital-a
+      HOSPITAL_NAME: "Hospital A"
+      DATASET_SIZE: "1000"
+      HEARTBEAT_INTERVAL_SEC: "5"
+    networks:
+      - fedmed-net
+
+  hospital-b:
+    build: ./client_node
+    depends_on:
+      - server
+    environment:
+      SERVER_ADDR: server:50051
+      NODE_ID: hospital-b
+      HOSPITAL_NAME: "Hospital B"
+      DATASET_SIZE: "800"
+      HEARTBEAT_INTERVAL_SEC: "5"
+    networks:
+      - fedmed-net
+
+  hospital-c:
+    build: ./client_node
+    depends_on:
+      - server
+    environment:
+      SERVER_ADDR: server:50051
+      NODE_ID: hospital-c
+      HOSPITAL_NAME: "Hospital C"
+      DATASET_SIZE: "1200"
+      HEARTBEAT_INTERVAL_SEC: "5"
+    networks:
+      - fedmed-net
+
+networks:
+  fedmed-net:
+    driver: bridge
