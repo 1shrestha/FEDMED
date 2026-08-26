@@ -12,7 +12,7 @@ Algorithms
   audit payloads.
 
 All key objects are from the ``cryptography`` library (>=42).  Private keys
-are **never** serialised by default; callers that need persistence should
+are **never** serialised by default; callers that need the persistence should
 use the provided ``serialise_*`` helpers and store keys securely (HSM / Vault
 in production; file system for local dev only).
 """

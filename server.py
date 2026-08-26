@@ -1,7 +1,7 @@
 """FedMed control-plane gRPC server — Week 1.
 
 Runs NodeService (registration/heartbeat/status) and a stub
-TrainingControlService so the round-start signal path exists, even
+TrainingControlService so round-start signal path exists, even
 though the round orchestration logic itself lands in Week 2.
 """
 
