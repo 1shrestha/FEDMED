@@ -1,164 +1,91 @@
-# FedMed Security Module
+FedMed — Implementation Progress= [18-08-26]
+1. Project Environment Setup
+Created the FED_MED project directory.
 
-A production-grade security and cryptography infrastructure for the **FedMed** federated learning platform, enabling privacy-preserving collaborative model training across hospital nodes without sharing raw patient data.
+Created and activated a Python virtual environment:
 
-## 🏗️ Module Structure
+.venv
+Current environment initially used Python 3.14.5 (64-bit).
+2. Federated Learning Dependencies
 
-```
-fedmed/
-├── .gitignore                       # Excludes certs, .venv, __pycache__
-├── requirements.txt                 # All pinned Python dependencies
-├── certs/                           # Generated TLS certs (gitignored)
-│   └── .gitkeep
-├── scripts/
-│   └── gen_certs.py                 # Self-signed CA + cert generator
-├── docs/
-│   ├── adr-001-library-selection.md # Architecture Decision Record 1
-│   ├── adr-002-ecdh-hkdf.md         # Architecture Decision Record 2
-│   ├── secagg-protocol-notes.md     # SecAgg protocol study notes
-│   └── threat-model-poisoning.md    # Byzantine/poisoning threat model
-└── security/
-    ├── __init__.py                  # Public API re-export
-    ├── grpc_tls.py                  # mTLS credential loaders
-    ├── crypto_utils.py              # ECDSA, ECDH, AES-GCM, PRG
-    ├── secagg.py                    # 4-round Secure Aggregation protocol
-    ├── defenses.py                  # Byzantine-robust aggregation rules
-    └── tests/
-        ├── test_grpc_tls.py
-        ├── test_crypto_utils.py
-        ├── test_secagg.py
-        └── test_defenses.py
-```
+Installed the required Federated Learning framework:
 
----
+Flower (flwr) 1.33.0
+FastAPI and supporting Flower dependencies
+gRPC
+Protobuf
+Cryptography
+PyYAML
+SQLAlchemy and other Flower dependencies
 
-## ⚡ Quick Start
+Flower installation completed successfully.
 
-### 1. Install dependencies
+3. PyTorch Setup
 
-```powershell
-pip install -r requirements.txt
-```
+Attempted to install:
 
-### 2. Generate TLS certificates (local dev)
+PyTorch
+TorchVision
+NumPy
+Pillow and supporting libraries
 
-```powershell
-python scripts/gen_certs.py --clients 3
-```
+The initial installation used:
 
-Outputs to `certs/`:
+torch 2.13.0
+torchvision 0.28.0
 
-```
-ca.pem / ca.key
-server.pem / server.key
-client_0.pem / client_0.key  (× N)
-```
+but importing PyTorch produced:
 
-### 3. Run the test suite
+OSError: [WinError 1114]
+Dynamic link library (DLL) initialization routine failed
 
-```powershell
-python -m unittest discover -s security/tests -v
-```
+specifically while loading:
 
----
+torch\lib\c10.dll
 
-## 🔐 Security Components
+4. CPU PyTorch Attempt
 
-### [`security/grpc_tls.py`](security/grpc_tls.py) — Mutual TLS
+The regular PyTorch installation was removed and a CPU-only build was installed:
 
-Provides `grpc.ServerCredentials` and `grpc.ChannelCredentials` for enforcing mTLS on all gRPC channels between the Flower server and hospital clients.
+torch 2.13.0+cpu
+torchvision 0.28.0+cpu
 
-```python
-from security import load_server_credentials, load_channel_credentials
+The installation itself completed successfully.
 
-# On the FL server
-server_creds = load_server_credentials("certs")
-grpc_server.add_secure_port("0.0.0.0:8080", server_creds)
+However, the same c10.dll initialization issue remained during import.
 
-# On each hospital client
-channel_creds = load_channel_credentials("certs", client_id=0)
-channel = grpc.secure_channel("fl-server:8080", channel_creds)
-```
+5. Current Status
+Environment
+    ↓
+Python 3.14.5
+    ↓
+Virtual Environment (.venv)
+    ↓
+Flower 1.33.0                 ✅
+    ↓
+PyTorch                       ⚠️ DLL initialization issue
+    ↓
+ML Model                      ⏳
+    ↓
+Federated Clients             ⏳
+    ↓
+FedAvg Server                 ⏳
+6. Next Step
 
-### [`security/crypto_utils.py`](security/crypto_utils.py) — Cryptographic Primitives
+The next action is to create a Python 3.12 virtual environment and install PyTorch + Flower there.
 
-| Function | Algorithm | Purpose |
-|----------|-----------|---------|
-| `generate_ecdsa_keypair()` | ECDSA NIST P-256 | Key pair generation |
-| `sign_update(priv, data)` | ECDSA-SHA256 | Authenticate model updates |
-| `verify_update(pub, data, sig)` | ECDSA-SHA256 | Server-side update verification |
-| `dh_exchange(priv, peer_pub)` | ECDH + HKDF-SHA256 | Pairwise mask seed derivation |
-| `aes_gcm_encrypt(key, pt)` | AES-256-GCM | Metadata / audit encryption |
-| `prg_mask(seed, shape)` | SHA-256 counter mode | Deterministic mask generation |
+After PyTorch imports successfully, implementation will proceed in this order:
 
-### [`security/secagg.py`](security/secagg.py) — Secure Aggregation
+PyTorch Model
+      ↓
+Hospital Client 1
+Hospital Client 2
+Hospital Client 3
+      ↓
+Flower Server
+      ↓
+FedAvg Aggregation
+      ↓
+Global Model
 
-4-round masking protocol (Bonawitz et al., 2017). The server **never sees** plaintext model updates.
-
-```python
-from security import SecAggCoordinator, SecAggClient
-
-# Each FL client
-client = SecAggClient(client_id=0, n_clients=5, threshold=3)
-bundle  = client.generate_keys()          # Round 1
-client.receive_peer_keys(all_bundles)     # Round 2
-masked  = client.mask_update(local_grad)  # Round 3
-
-# FL server / Flower strategy
-coord = SecAggCoordinator(n_clients=5, averaging_fn=go_averaging_rpc)
-coord.round1_collect_keys(bundles)
-coord.round2_distribute_keys()
-coord.round3_collect_masked_updates(masked_updates)
-aggregate = coord.round4_unmask(dropout_ids, dropout_shares)
-```
-
-> The `averaging_fn` hook is how the **Go-based aggregation service** plugs in.
-
-### [`security/defenses.py`](security/defenses.py) — Byzantine-Robust Aggregation
-
-| Function | Breakdown Point | Best Against |
-|----------|----------------|-------------|
-| `trimmed_mean(updates, trim_ratio)` | floor(n × ratio) clients | Scaling attacks |
-| `coordinate_median(updates)` | ~50% of clients | Any outlier attack |
-| `krum(updates, f)` | f < (n−2)/2 | Targeted poisoning |
-| `multi_krum(updates, f, m)` | f < (n−2)/2 | Poisoning + variance |
-
----
-
-## 🔑 Key Management
-
-| Environment | Key Storage |
-|-------------|-------------|
-| **Local dev** | `certs/` directory (auto-generated by `gen_certs.py`) |
-| **Production** | HSM / HashiCorp Vault PKI engine |
-
-> ⚠️ **Never commit** `*.pem`, `*.key`, or `*.env` files. The `.gitignore` covers these.
-
----
-
-## 🧪 Test Coverage
-
-| Module | Tests | Key Assertions |
-|--------|-------|---------------|
-| `grpc_tls.py` | 8 | Cert loading, chain verification, expiry |
-| `crypto_utils.py` | 18 | Sign/verify, DH agreement, AES-GCM auth |
-| `secagg.py` | 14 | Shamir SSS, full 4-round, dropout recovery |
-| `defenses.py` | 20+ | Correctness + Byzantine resilience |
-
----
-
-## 🗺️ Architecture Decisions
-
-- [ADR-001: Library Selection](docs/adr-001-library-selection.md)
-- [ADR-002: ECDH + HKDF Key Derivation](docs/adr-002-ecdh-hkdf.md)
-- [SecAgg Protocol Notes](docs/secagg-protocol-notes.md)
-- [Threat Model — Poisoning Attacks](docs/threat-model-poisoning.md)
-
----
-
-## 📌 Production Checklist
-
-- [ ] Replace `averaging_fn` with Go gRPC aggregation service stub
-- [ ] Wire `SecAggCoordinator` into Flower `Strategy` overrides
-- [ ] Replace `certs/` loader with HashiCorp Vault PKI for hospital nodes
-- [ ] Add `python -m unittest discover -s security/tests -v` to CI pipeline
+Important: No actual FedMed ML/FL model has been implemented yet; so far, we have completed environment setup and dependency installation/troubleshooting.
