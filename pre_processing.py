@@ -5,9 +5,9 @@ from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
 
-# =========================================================
+# =======================================================
 # 1. TRAINING TRANSFORM
-# =========================================================
+# =======================================================
 
 train_transform = transforms.Compose([
     transforms.RandomRotation(10),

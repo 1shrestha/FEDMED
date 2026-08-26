@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package fedmed.node;
 
-// NodeService handles hospital/client node registration, discovery,
+// NodeService handles the hospital/client node registration, discovery,
 // and liveness (heartbeat) — the control-plane, not the FL weight exchange.
 service NodeService {
   // A hospital node calls this once on startup to join the pool.
