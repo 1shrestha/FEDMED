@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
+packages = ["app", "src"]
 
 [tool.flwr.app]
 publisher = "fedmed"
