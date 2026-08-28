@@ -9,9 +9,6 @@ from flwr.app import ArrayRecord, ConfigRecord, Context
 from flwr.serverapp import Grid, ServerApp
 from flwr.serverapp.strategy import FedAvg as FlowerFedAvg
 
-from src.aggregation.fedavg import FedAvgAggregator
-from src.fl.client import FederatedFitResult
-from src.fl.orchestrator import FedMedOrchestrator
 from src.fl.strategy import FedAvgStrategy
 
 

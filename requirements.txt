@@ -9,10 +9,11 @@ numpy
 PyYAML
 
 # Deep learning
-torch
+torch==2.7.1
 
 # Federated learning runtime
 flwr==1.34.0
+ray==2.55.1
 
 # Testing
 pytest

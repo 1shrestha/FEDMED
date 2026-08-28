@@ -51,6 +51,9 @@ class FedMedOrchestrator:
     """Central composition root for the FedMed Flower application."""
 
     def __init__(self) -> None:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+
         self._training_config = TrainingConfig(
             local_epochs=1,
             batch_size=4,
