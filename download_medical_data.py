@@ -1,4 +1,4 @@
-import medmnist
+import medmnist 
 from medmnist import PneumoniaMNIST
 
 train_dataset = PneumoniaMNIST(

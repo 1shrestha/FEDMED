@@ -2,7 +2,7 @@
 
 Registers itself with the FedMed control-plane server, then heartbeats
 on a loop. Run several of these (different NODE_ID/HOSPITAL_NAME) to
-simulate multiple hospitals — that's the Week 1 deliverable.
+simulate multiple hospitals — that's Week 1 deliverable.
 """
 
 import os
