@@ -28,6 +28,12 @@ clientapp = "app.main:client_app"
 [tool.flwr.app.config]
 num-server-rounds = 1
 
+[tool.flwr.federations]
+default = "local-simulation"
+
+[tool.flwr.federations.local-simulation]
+options.num-supernodes = 2
+
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
 

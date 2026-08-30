@@ -103,11 +103,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from src.common.exceptions import FederatedLearningError
 from src.fl.aggregation import Aggregator
 from src.fl.client import (
     FederatedClient,
+    FederatedEvaluateResult,
     FederatedFitResult,
 )
 from src.fl.parameters import ParameterPayload
@@ -210,6 +212,20 @@ class FederatedStrategy(ABC):
         Concrete strategies should delegate mathematical
         aggregation to an Aggregator rather than implementing
         parameter arithmetic directly.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def aggregate_evaluate(
+        self,
+        results: Mapping[str, FederatedEvaluateResult],
+        round_number: int,
+    ) -> "FedAvgEvaluationResult":
+        """
+        Aggregate successful local evaluation results.
+
+        The aggregation result contains the sample-weighted mean
+        loss and the sample-weighted mean of each evaluation metric.
         """
         raise NotImplementedError
 
@@ -484,6 +500,55 @@ class FederatedStrategy(ABC):
                 )
 
         return results
+
+    @staticmethod
+    def _validate_evaluate_results(
+        results: Mapping[str, FederatedEvaluateResult],
+    ) -> Mapping[str, FederatedEvaluateResult]:
+        """Validate evaluation aggregation input."""
+
+        if not isinstance(results, Mapping):
+            raise FederatedLearningError(
+                "aggregate_evaluate() results must be a mapping from "
+                "client IDs to FederatedEvaluateResult objects, got "
+                f"{type(results).__name__}."
+            )
+
+        if not results:
+            raise FederatedLearningError(
+                "aggregate_evaluate() cannot aggregate an empty set "
+                "of evaluation results."
+            )
+
+        for client_id, result in results.items():
+            if not isinstance(client_id, str):
+                raise FederatedLearningError(
+                    "aggregate_evaluate() result keys must be strings, "
+                    f"got {type(client_id).__name__}."
+                )
+
+            if not client_id.strip():
+                raise FederatedLearningError(
+                    "aggregate_evaluate() cannot contain an empty "
+                    "client ID."
+                )
+
+            if not isinstance(result, FederatedEvaluateResult):
+                raise FederatedLearningError(
+                    "aggregate_evaluate() result values must be "
+                    "FederatedEvaluateResult instances, got "
+                    f"{type(result).__name__} for client '{client_id}'."
+                )
+
+        return results
+
+
+@dataclass(frozen=True)
+class FedAvgEvaluationResult:
+    """Sample-weighted evaluation output for a federated round."""
+
+    loss: float
+    metrics: Mapping[str, float]
 
 
 # ============================================================
@@ -782,3 +847,61 @@ class FedAvgStrategy(FederatedStrategy):
             )
 
         return aggregated_parameters
+
+    def aggregate_evaluate(
+        self,
+        results: Mapping[str, FederatedEvaluateResult],
+        round_number: int,
+    ) -> FedAvgEvaluationResult:
+        """Aggregate evaluation results using sample-weighted means."""
+
+        self._validate_round_number(round_number)
+        validated_results = self._validate_evaluate_results(results)
+
+        total_examples = sum(
+            result.num_examples
+            for result in validated_results.values()
+        )
+
+        if total_examples <= 0:
+            raise FederatedLearningError(
+                "aggregate_evaluate() requires at least one positive "
+                f"num_examples across clients, got {total_examples}."
+            )
+
+        weights = {
+            client_id: result.num_examples / total_examples
+            for client_id, result in validated_results.items()
+        }
+
+        metric_keys = {
+            client_id: frozenset(result.metrics.keys())
+            for client_id, result in validated_results.items()
+        }
+        reference_keys = next(iter(metric_keys.values()))
+        if any(keys != reference_keys for keys in metric_keys.values()):
+            raise FederatedLearningError(
+                "aggregate_evaluate() requires all clients to expose "
+                "the same metric keys."
+            )
+
+        aggregated_loss = sum(
+            weights[client_id] * result.loss
+            for client_id, result in validated_results.items()
+        )
+
+        aggregated_metrics = {
+            key: sum(
+                weights[client_id] * validated_results[client_id].metrics[key]
+                for client_id in validated_results
+            )
+            for key in reference_keys
+        }
+
+        return FedAvgEvaluationResult(
+            loss=float(aggregated_loss),
+            metrics={
+                str(key): float(value)
+                for key, value in aggregated_metrics.items()
+            },
+        )
