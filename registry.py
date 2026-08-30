@@ -1,62 +1,163 @@
-"""In-memory node registry for Week 1.
+"""
+registry.py
 
-Week 3 note: this gets backed by Postgres once we add server-restart
-recovery. For now it's a simple thread-safe dict so we can prove out
-the registration/heartbeat/status flow end to end.
+Simple Postgres-backed service registry for FedMed hospital nodes.
+
+Design goals (per Week 2 spec):
+  - No hardcoded IPs: nodes self-register with an address + TTL.
+  - "Live" == heartbeat received within TTL window. A background reaper
+    (or a plain WHERE clause, see get_live_nodes) treats stale rows as gone
+    without needing a separate service like Consul/etcd for a project this size.
+  - This is intentionally boring/relational — one table, upserts on heartbeat.
+
+Swap-out path: if this ever needs multi-DC discovery, cross-cluster health
+checks, or leader election, promote to Consul/etcd. Not needed yet.
 """
 
-import threading
+from __future__ import annotations
+
 import time
+import uuid
+from dataclasses import dataclass
+from typing import Optional
 
-import node_service_pb2 as node_pb2
-
-HEARTBEAT_SUSPECT_AFTER_SEC = 10   # no heartbeat in this long -> SUSPECT
-HEARTBEAT_DEAD_AFTER_SEC = 25      # no heartbeat in this long -> DEAD
+import asyncpg
 
 
+CREATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS node_registry (
+    node_id             TEXT PRIMARY KEY,
+    address             TEXT NOT NULL,          -- host:port nodes are reachable at
+    hospital_label      TEXT NOT NULL,          -- human-readable silo name, no PHI
+    registered_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_heartbeat_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ttl_seconds          INTEGER NOT NULL DEFAULT 30,
+    capabilities         JSONB NOT NULL DEFAULT '{}'::jsonb,  -- e.g. {"gpu": true, "dataset_size": 4200}
+    status                TEXT NOT NULL DEFAULT 'ACTIVE'       -- ACTIVE | DRAINING | RETIRED
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_registry_heartbeat
+    ON node_registry (last_heartbeat_at);
+"""
+
+
+@dataclass
 class NodeRecord:
-    def __init__(self, node_id, hospital_name, address, dataset_size):
-        self.node_id = node_id
-        self.hospital_name = hospital_name
-        self.address = address
-        self.dataset_size = dataset_size
-        self.last_heartbeat = time.time()
+    node_id: str
+    address: str
+    hospital_label: str
+    last_heartbeat_at: float  # unix seconds, populated on read
+    ttl_seconds: int
+    capabilities: dict
+    status: str
 
-    def current_state(self):
-        elapsed = time.time() - self.last_heartbeat
-        if elapsed > HEARTBEAT_DEAD_AFTER_SEC:
-            return node_pb2.DEAD
-        if elapsed > HEARTBEAT_SUSPECT_AFTER_SEC:
-            return node_pb2.SUSPECT
-        return node_pb2.ACTIVE
+    def is_live(self, now: Optional[float] = None) -> bool:
+        now = now if now is not None else time.time()
+        return (now - self.last_heartbeat_at) <= self.ttl_seconds and self.status == "ACTIVE"
 
 
 class NodeRegistry:
-    def __init__(self):
-        self._nodes = {}
-        self._lock = threading.Lock()
+    """Thin async wrapper around the node_registry table."""
 
-    def register(self, node_id, hospital_name, address, dataset_size):
-        with self._lock:
-            self._nodes[node_id] = NodeRecord(
-                node_id, hospital_name, address, dataset_size
+    def __init__(self, dsn: str):
+        self._dsn = dsn
+        self._pool: Optional[asyncpg.Pool] = None
+
+    async def connect(self) -> None:
+        self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=10)
+        async with self._pool.acquire() as conn:
+            await conn.execute(CREATE_TABLE_SQL)
+
+    async def close(self) -> None:
+        if self._pool:
+            await self._pool.close()
+
+    async def register(
+        self,
+        address: str,
+        hospital_label: str,
+        ttl_seconds: int = 30,
+        capabilities: Optional[dict] = None,
+        node_id: Optional[str] = None,
+    ) -> str:
+        """Register a node (or re-register with a fresh id if none supplied).
+        Called once on node startup; heartbeat() is used after that."""
+        node_id = node_id or str(uuid.uuid4())
+        import json
+
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO node_registry (node_id, address, hospital_label, ttl_seconds, capabilities, status)
+                VALUES ($1, $2, $3, $4, $5::jsonb, 'ACTIVE')
+                ON CONFLICT (node_id) DO UPDATE
+                    SET address = EXCLUDED.address,
+                        hospital_label = EXCLUDED.hospital_label,
+                        ttl_seconds = EXCLUDED.ttl_seconds,
+                        capabilities = EXCLUDED.capabilities,
+                        last_heartbeat_at = now(),
+                        status = 'ACTIVE'
+                """,
+                node_id, address, hospital_label, ttl_seconds, json.dumps(capabilities or {}),
+            )
+        return node_id
+
+    async def heartbeat(self, node_id: str) -> bool:
+        """Bump last_heartbeat_at. Returns False if the node was never registered."""
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE node_registry SET last_heartbeat_at = now(), status = 'ACTIVE' WHERE node_id = $1",
+                node_id,
+            )
+        return result.endswith("1")  # 'UPDATE 1' vs 'UPDATE 0'
+
+    async def deregister(self, node_id: str) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE node_registry SET status = 'RETIRED' WHERE node_id = $1", node_id
             )
 
-    def heartbeat(self, node_id):
-        with self._lock:
-            if node_id not in self._nodes:
-                return False
-            self._nodes[node_id].last_heartbeat = time.time()
-            return True
+    async def get_live_nodes(self) -> list[NodeRecord]:
+        """Live = ACTIVE status AND heartbeat within its own TTL window.
+        This is the query the round manager calls for node selection —
+        staleness is computed in SQL so we never orchestrate around a
+        node that's actually dead but whose row hasn't been reaped yet."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT node_id, address, hospital_label, capabilities, status,
+                       EXTRACT(EPOCH FROM last_heartbeat_at) AS last_heartbeat_unix,
+                       ttl_seconds
+                FROM node_registry
+                WHERE status = 'ACTIVE'
+                  AND last_heartbeat_at > now() - (ttl_seconds || ' seconds')::interval
+                """
+            )
+        return [
+            NodeRecord(
+                node_id=r["node_id"],
+                address=r["address"],
+                hospital_label=r["hospital_label"],
+                last_heartbeat_at=r["last_heartbeat_unix"],
+                ttl_seconds=r["ttl_seconds"],
+                capabilities=r["capabilities"],
+                status=r["status"],
+            )
+            for r in rows
+        ]
 
-    def snapshot(self):
-        """Returns a list of NodeRecord for status reporting."""
-        with self._lock:
-            return list(self._nodes.values())
-
-    def active_node_ids(self):
-        with self._lock:
-            return [
-                n.node_id for n in self._nodes.values()
-                if n.current_state() == node_pb2.ACTIVE
-            ]
+    async def reap_stale(self) -> int:
+        """Optional janitor pass: mark long-dead rows RETIRED so the table
+        doesn't grow forever with zombie entries. Not required for
+        get_live_nodes() correctness (that's TTL-filtered already) — this
+        is just housekeeping, safe to run on a cron/background task."""
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE node_registry
+                SET status = 'RETIRED'
+                WHERE status = 'ACTIVE'
+                  AND last_heartbeat_at < now() - (ttl_seconds * 5 || ' seconds')::interval
+                """
+            )
+        return int(result.split(" ")[-1])

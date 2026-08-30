@@ -1,21 +1,7 @@
-# ── Federated Learning ──────────────────────────────────────────────────────────
-flwr>=1.8.0,<2.0.0              # Flower FL framework
-
-# ── gRPC / Protobuf ─────────────────────────────────────────────────────────────
-grpcio>=1.62.0,<2.0.0
-grpcio-tools>=1.62.0,<2.0.0
-protobuf>=4.25.0,<5.0.0
-
-# ── Cryptography ────────────────────────────────────────────────────────────────
-cryptography>=42.0.0,<44.0.0    # ECDSA, DH, AES-GCM, X.509 cert generation
-secretsharing>=0.2.6             # Shamir's Secret Sharing (pure Python)
-
-# ── ML / Numerics ───────────────────────────────────────────────────────────────
-torch>=2.2.0,<3.0.0
-numpy>=1.26.0,<2.0.0
-
-# ── Utilities ───────────────────────────────────────────────────────────────────
-typing_extensions>=4.10.0
-
-# ── Testing ─────────────────────────────────────────────────────────────────────
-# (uses stdlib unittest — no extra packages required)
+fastapi
+uvicorn[standard]
+asyncpg
+pydantic>=2
+grpcio
+grpcio-tools
+httpx
