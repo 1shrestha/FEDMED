@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Regenerates Python gRPC stubs from the .proto contracts.
+# Regenerates Python gRPC stubs from .proto contracts.
 # Run this from the repo root: ./scripts/generate_protos.sh
-# Every teammate runs this after pulling changes to proto/*.proto so
+# Every teammate runs this after pulling changes to the proto/*.proto so
 # everyone's generated code stays in sync.
 
 set -e
