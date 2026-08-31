@@ -1,0 +1,41 @@
+application:
+  name: fedmed
+  environment: development
+  version: "0.1.0"
+
+federated:
+  strategy: fedavg
+  num_rounds: 3
+  min_clients: 1
+  min_available_clients: 1
+  fraction_fit: 1.0
+  fraction_evaluate: 1.0
+
+training:
+  local_epochs: 1
+  batch_size: 4
+  learning_rate: 0.01
+  optimizer: sgd
+  seed: 42
+
+model:
+  name: flower_smoke_test_model
+  device: cpu
+
+data:
+  root_dir: ./data
+  num_clients: 2
+  partition_type: iid
+
+server:
+  host: 127.0.0.1
+  port: 8080
+
+checkpoint:
+  enabled: false
+  directory: ./checkpoints
+  save_every_round: 1
+
+logging:
+  level: INFO
+  directory: ./logs

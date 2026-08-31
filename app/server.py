@@ -153,7 +153,6 @@ class FedMedFlowerStrategy(FlowerFedAvg):
 
     def configure_train(
         self,
-        *,
         server_round: int,
         arrays: ArrayRecord,
         config: ConfigRecord,
@@ -176,7 +175,6 @@ class FedMedFlowerStrategy(FlowerFedAvg):
 
     def configure_evaluate(
         self,
-        *,
         server_round: int,
         arrays: ArrayRecord,
         config: ConfigRecord,
