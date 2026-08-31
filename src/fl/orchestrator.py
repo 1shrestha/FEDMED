@@ -31,7 +31,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from app.client import create_client_app
 from app.server import create_server_app
 from src.aggregation.fedavg import FedAvgAggregator
-from src.common.config import TrainingConfig
+from src.common.config import load_config
 from src.fl.client import FederatedClient
 from src.fl.strategy import FedAvgStrategy
 from src.models.base_model import BaseModel
@@ -54,13 +54,7 @@ class FedMedOrchestrator:
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
 
-        self._training_config = TrainingConfig(
-            local_epochs=1,
-            batch_size=4,
-            learning_rate=0.01,
-            optimizer="sgd",
-            seed=42,
-        )
+        self._training_config = load_config().training
 
     # ------------------------------------------------------------------
     # DATA
