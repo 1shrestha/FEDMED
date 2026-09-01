@@ -5,3 +5,5 @@ pydantic>=2
 grpcio
 grpcio-tools
 httpx
+torch
+torchvision
