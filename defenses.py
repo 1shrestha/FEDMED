@@ -1,7 +1,7 @@
 """
 security.defenses
 =================
-Byzantine-robust aggregation algorithms for FedMed.
+Byzantine-robust aggregation algorithms for the FedMed.
 
 All functions accept a list of 1-D NumPy arrays (flattened model updates)
 and return a single 1-D array representing the aggregated result.  The
