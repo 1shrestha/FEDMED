@@ -12,7 +12,7 @@ States (standard three-state breaker):
     OPEN       — too many recent failures; calls fail fast (no RPC attempt)
                  until reset_timeout_s elapses.
     HALF_OPEN  — reset timeout elapsed; the next call is allowed through
-                 as a probe. Success -> CLOSED. Failure -> OPEN again.
+                 as the probe. Success -> CLOSED. Failure -> OPEN again.
 """
 
 from __future__ import annotations
