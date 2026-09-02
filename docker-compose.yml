@@ -1,52 +1,63 @@
 version: "3.9"
 
 services:
-  server:
-    build: ./server
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fedmed
+      POSTGRES_PASSWORD: fedmed
+      POSTGRES_DB: fedmed
     ports:
-      - "50051:50051"
-    networks:
-      - fedmed-net
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fedmed"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
 
-  hospital-a:
-    build: ./client_node
+  api:
+    build: .
     depends_on:
-      - server
+      postgres:
+        condition: service_healthy
     environment:
-      SERVER_ADDR: server:50051
-      NODE_ID: hospital-a
-      HOSPITAL_NAME: "Hospital A"
-      DATASET_SIZE: "1000"
-      HEARTBEAT_INTERVAL_SEC: "5"
-    networks:
-      - fedmed-net
+      DATABASE_URL: postgresql://fedmed:fedmed@postgres:5432/fedmed
+      FLOWER_SERVER_ADDRESS: flower-server:8080   # placeholder — Flower's actual server, not this repo
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/nodes/live')"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
 
-  hospital-b:
-    build: ./client_node
+  node1:
+    build: .
     depends_on:
-      - server
-    environment:
-      SERVER_ADDR: server:50051
-      NODE_ID: hospital-b
-      HOSPITAL_NAME: "Hospital B"
-      DATASET_SIZE: "800"
-      HEARTBEAT_INTERVAL_SEC: "5"
-    networks:
-      - fedmed-net
+      api:
+        condition: service_healthy
+    command: ["python", "mock_node.py", "--port", "9001", "--hospital", "General Hospital",
+              "--registry-url", "http://api:8001", "--advertise-host", "node1"]
+    ports:
+      - "9001:9001"
 
-  hospital-c:
-    build: ./client_node
+  node2:
+    build: .
     depends_on:
-      - server
-    environment:
-      SERVER_ADDR: server:50051
-      NODE_ID: hospital-c
-      HOSPITAL_NAME: "Hospital C"
-      DATASET_SIZE: "1200"
-      HEARTBEAT_INTERVAL_SEC: "5"
-    networks:
-      - fedmed-net
+      api:
+        condition: service_healthy
+    command: ["python", "mock_node.py", "--port", "9002", "--hospital", "St. Mary's",
+              "--registry-url", "http://api:8001", "--advertise-host", "node2"]
+    ports:
+      - "9002:9002"
 
-networks:
-  fedmed-net:
-    driver: bridge
+  node3:
+    build: .
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["python", "mock_node.py", "--port", "9003", "--hospital", "City Clinic",
+              "--registry-url", "http://api:8001", "--advertise-host", "node3"]
+    ports:
+      - "9003:9003"

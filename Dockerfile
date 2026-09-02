@@ -5,8 +5,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY proto/ proto/
+RUN python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/coordination.proto
 
-EXPOSE 50051
+COPY *.py .
 
-CMD ["python3", "server.py"]
+EXPOSE 8001
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8001"]
