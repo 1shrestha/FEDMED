@@ -74,3 +74,27 @@ def test(model, testloader):
     accuracy = 100 * correct / total
 
     return accuracy
+
+def train_one_epoch(model, trainloader, optimizer, criterion, device="cpu"):
+    """
+    Train the model for one epoch on local hospital data.
+    Returns the average training loss.
+    """
+    model.train()
+    total_loss = 0.0
+
+    for images, labels in trainloader:
+        images = images.to(device)
+        labels = labels.to(device)
+
+        optimizer.zero_grad()
+
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+
+    return total_loss / len(trainloader)
