@@ -7,9 +7,9 @@ from torch.utils.data import Subset
 from torch.utils.data import DataLoader
 
 
-# ==========================================
+# =========================================
 # 1. DEFINE NUMBER OF HOSPITALS
-# ==========================================
+# =========================================
 
 num_hospitals = 5
 
