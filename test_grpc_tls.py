@@ -5,7 +5,7 @@ Unit tests for security.grpc_tls.
 
 Tests cover:
 * _read() raises FileNotFoundError on missing file.
-* load_server_credentials() succeeds with valid cert files.
+* load_server_credentials() succeeds with the valid cert files.
 * load_channel_credentials() succeeds with valid cert files.
 * load_channel_credentials() raises FileNotFoundError for a missing client cert.
 * verify_cert_chain() returns True for a valid chain.
