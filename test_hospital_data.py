@@ -2,7 +2,7 @@ from data.hospital_data import get_hospital_loader
 
 
 print("DAY 4: Hospital DataLoader Test")
-print("--------------------------------")
+print("-----------------------------")
 
 for hospital_id in range(1, 6):
 
