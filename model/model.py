@@ -30,7 +30,7 @@ def train(model, trainloader, epochs=1):
 
     for epoch in range(epochs):
 
-        total_loss = 0
+        total_loss = 0.0
 
         for images, labels in trainloader:
 
@@ -56,8 +56,11 @@ def test(model, testloader):
 
     model.eval()
 
+    criterion = nn.CrossEntropyLoss()
+
     correct = 0
     total = 0
+    total_loss = 0.0
 
     with torch.no_grad():
 
@@ -65,34 +68,45 @@ def test(model, testloader):
 
             output = model(images)
 
-            _, predicted = torch.max(output.data, 1)
+            loss = criterion(output, labels)
+            total_loss += loss.item()
+
+            _, predicted = torch.max(output, 1)
 
             total += labels.size(0)
-
             correct += (predicted == labels).sum().item()
 
     accuracy = 100 * correct / total
+    average_loss = total_loss / len(testloader)
 
-    return accuracy
+    return average_loss, accuracy
 
-def train_one_epoch(model, trainloader, optimizer, criterion, device="cpu"):
-    """
-    Train the model for one epoch on local hospital data.
-    Returns the average training loss.
-    """
+
+def train_one_epoch(
+    model,
+    trainloader,
+    optimizer,
+    criterion,
+    device="cpu"
+):
+
     model.train()
+
     total_loss = 0.0
 
     for images, labels in trainloader:
+
         images = images.to(device)
         labels = labels.to(device)
 
         optimizer.zero_grad()
 
         outputs = model(images)
+
         loss = criterion(outputs, labels)
 
         loss.backward()
+
         optimizer.step()
 
         total_loss += loss.item()
