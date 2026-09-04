@@ -17,4 +17,4 @@ for hospital_id in range(1, 6):
         f"{len(loader)} batches"
     )
 
-print("\nHospital-specific DataLoaders working with success.")
+print("\nHospital-specific DataLoaders working successfully.")
