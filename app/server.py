@@ -1207,6 +1207,35 @@ def create_server_app(
             {},
         )
 
+        print(
+            "[FedMed DEBUG] ServerApp run_config:",
+            dict(run_config),
+            flush=True,
+        )
+
+        configured_num_rounds = run_config.get(
+            "num-server-rounds",
+            num_rounds,
+        )
+
+        print(
+            "[FedMed DEBUG] configured num-server-rounds:",
+            configured_num_rounds,
+            flush=True,
+        )
+
+        if (
+            not isinstance(configured_num_rounds, int)
+            or isinstance(configured_num_rounds, bool)
+            or configured_num_rounds < 1
+        ):
+            raise FederatedLearningError(
+                "run_config['num-server-rounds'] must be "
+                "a positive integer."
+            )
+
+        effective_num_rounds = configured_num_rounds
+
         train_config = ConfigRecord(
             dict(run_config),
         )
@@ -1219,7 +1248,7 @@ def create_server_app(
 
         print(
             "[FedMed DEBUG] starting Flower strategy for "
-            f"{num_rounds} round(s)",
+            f"{effective_num_rounds} round(s)",
             flush=True,
         )
 
@@ -1230,7 +1259,7 @@ def create_server_app(
         strategy.start(
             grid=grid,
             initial_arrays=initial_arrays,
-            num_rounds=num_rounds,
+            num_rounds=effective_num_rounds,
             train_config=train_config,
         )
 
