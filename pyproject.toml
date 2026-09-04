@@ -26,7 +26,7 @@ serverapp = "app.main:server_app"
 clientapp = "app.main:client_app"
 
 [tool.flwr.app.config]
-num-server-rounds = 1
+num-server-rounds = 3
 
 
 #######################################################################
