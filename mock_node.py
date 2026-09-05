@@ -81,8 +81,13 @@ async def register_and_heartbeat_loop(registry_url: str, address: str, hospital:
                 logger.warning("heartbeat failed: %s", r.text)
 
 
-async def serve(port: int, hospital: str, registry_url: str, decline: bool):
-    address = f"localhost:{port}"
+async def serve(port: int, hospital: str, registry_url: str, decline: bool, advertise_host: str, ttl_seconds: int):
+    # The address registered with the control plane must be reachable
+    # FROM the server's container/host — "localhost" only works when
+    # everything's on one machine. In Docker Compose, pass this node's
+    # own service name (e.g. --advertise-host node1) so the API
+    # container can actually dial back into it for NotifyRoundStart.
+    address = f"{advertise_host}:{port}"
     servicer = NodeCoordinationServicer(node_id=address, accept=not decline)
 
     server = grpc.aio.server()
@@ -92,7 +97,7 @@ async def serve(port: int, hospital: str, registry_url: str, decline: bool):
     logger.info("mock node listening on %s (%s)", address, hospital)
 
     heartbeat_task = asyncio.create_task(
-        register_and_heartbeat_loop(registry_url, address, hospital, ttl=30)
+        register_and_heartbeat_loop(registry_url, address, hospital, ttl=ttl_seconds)
     )
     try:
         await server.wait_for_termination()
@@ -106,6 +111,17 @@ if __name__ == "__main__":
     parser.add_argument("--hospital", default="Unnamed Hospital")
     parser.add_argument("--registry-url", default="http://localhost:8001")
     parser.add_argument("--decline", action="store_true", help="simulate this node declining rounds")
+    parser.add_argument(
+        "--advertise-host", default="localhost",
+        help="hostname this node registers itself as (use the Docker Compose service name in compose)",
+    )
+    parser.add_argument(
+        "--ttl", type=int, default=6, dest="ttl_seconds",
+        help="registry TTL in seconds — kept short by default so the kill-node demo doesn't need a long wait",
+    )
     args = parser.parse_args()
 
-    asyncio.run(serve(args.port, args.hospital, args.registry_url, args.decline))
+    asyncio.run(serve(
+        args.port, args.hospital, args.registry_url, args.decline,
+        args.advertise_host, args.ttl_seconds,
+    ))
