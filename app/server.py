@@ -61,6 +61,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
+import hashlib
+
 import numpy as np
 
 from flwr.app import (
@@ -230,6 +232,29 @@ class FedMedFlowerStrategy(Strategy):
         """Return the framework-independent FedMed Strategy."""
         return self._fedmed_strategy
 
+    @staticmethod
+    def _parameter_fingerprint(
+        parameters: Sequence[np.ndarray],
+    ) -> str:
+        """Return a deterministic fingerprint for model parameters."""
+
+        digest = hashlib.sha256()
+
+        for parameter in parameters:
+            array = np.asarray(parameter)
+
+            digest.update(
+                str(array.shape).encode("utf-8")
+            )
+            digest.update(
+                str(array.dtype).encode("utf-8")
+            )
+            digest.update(
+                np.ascontiguousarray(array).tobytes()
+            )
+
+        return digest.hexdigest()[:16]
+
     # ==================================================================
     # Training configuration
     # ==================================================================
@@ -251,6 +276,16 @@ class FedMedFlowerStrategy(Strategy):
 
         print(
             "[FedMed DEBUG] configure_train ENTER",
+            flush=True,
+        )
+
+        input_parameters = arrays.to_numpy_ndarrays()
+
+        print(
+            "[FedMed PARAMS] "
+            f"ROUND {server_round} INPUT "
+            f"fingerprint="
+            f"{self._parameter_fingerprint(input_parameters)}",
             flush=True,
         )
 
@@ -404,6 +439,14 @@ class FedMedFlowerStrategy(Strategy):
                 results,
                 round_number=server_round,
             )
+        )
+
+        print(
+            "[FedMed PARAMS] "
+            f"ROUND {server_round} OUTPUT "
+            f"fingerprint="
+            f"{self._parameter_fingerprint(aggregated_parameters)}",
+            flush=True,
         )
 
         arrays = ArrayRecord.from_numpy_ndarrays(

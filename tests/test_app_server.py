@@ -596,6 +596,79 @@ def test_aggregate_train_delegates_to_fedmed_strategy() -> None:
     )
 
 
+def test_aggregate_train_global_parameters_evolve_across_rounds() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    round_one_replies = [
+        make_train_reply(
+            node_id=1,
+            parameters=[
+                np.array([[2.0]], dtype=np.float32),
+            ],
+            num_examples=1,
+        ),
+        make_train_reply(
+            node_id=2,
+            parameters=[
+                np.array([[4.0]], dtype=np.float32),
+            ],
+            num_examples=1,
+        ),
+    ]
+
+    round_one_arrays, _ = adapter.aggregate_train(
+        server_round=1,
+        replies=round_one_replies,
+    )
+
+    assert round_one_arrays is not None
+
+    round_one_parameters = round_one_arrays.to_numpy_ndarrays()
+
+    np.testing.assert_allclose(
+        round_one_parameters[0],
+        np.array([[3.0]], dtype=np.float32),
+    )
+
+    round_two_replies = [
+        make_train_reply(
+            node_id=1,
+            parameters=[
+                round_one_parameters[0] + 1.0,
+            ],
+            num_examples=1,
+        ),
+        make_train_reply(
+            node_id=2,
+            parameters=[
+                round_one_parameters[0] + 3.0,
+            ],
+            num_examples=1,
+        ),
+    ]
+
+    round_two_arrays, _ = adapter.aggregate_train(
+        server_round=2,
+        replies=round_two_replies,
+    )
+
+    assert round_two_arrays is not None
+
+    round_two_parameters = round_two_arrays.to_numpy_ndarrays()
+
+    np.testing.assert_allclose(
+        round_two_parameters[0],
+        np.array([[5.0]], dtype=np.float32),
+    )
+
+    assert not np.array_equal(
+        round_one_parameters[0],
+        round_two_parameters[0],
+    )
+
+
 def test_aggregate_train_returns_none_without_successful_replies() -> None:
     adapter = FedMedFlowerStrategy(
         fedmed_strategy=make_fedmed_strategy(),
