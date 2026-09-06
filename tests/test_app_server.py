@@ -38,6 +38,7 @@ import pytest
 from flwr.app import (
     ArrayRecord,
     ConfigRecord,
+    Error,
     Message,
     MessageType,
     MetricRecord,
@@ -540,6 +541,92 @@ def test_training_reply_requires_metrics() -> None:
         )
 
 
+def test_training_reply_rejects_invalid_parameters_record_type() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    message = _reply_message(
+        content=RecordDict(
+            {
+                FITRES_PARAMETERS_KEY: ConfigRecord({}),
+                FITRES_NUM_EXAMPLES_KEY: MetricRecord(
+                    {"num_examples": 4}
+                ),
+                FITRES_METRICS_KEY: ConfigRecord(
+                    {"accuracy": 0.8}
+                ),
+            }
+        ),
+        message_type=MessageType.TRAIN,
+        node_id=1,
+    )
+
+    with pytest.raises(
+        FederatedLearningError,
+        match="fitres.parameters.*ArrayRecord",
+    ):
+        adapter._fit_result_from_message(message)
+
+
+def test_training_reply_rejects_invalid_num_examples_record_type() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    message = _reply_message(
+        content=RecordDict(
+            {
+                FITRES_PARAMETERS_KEY: ArrayRecord.from_numpy_ndarrays(
+                    make_parameters()
+                ),
+                FITRES_NUM_EXAMPLES_KEY: ConfigRecord({}),
+                FITRES_METRICS_KEY: ConfigRecord(
+                    {"accuracy": 0.8}
+                ),
+            }
+        ),
+        message_type=MessageType.TRAIN,
+        node_id=1,
+    )
+
+    with pytest.raises(
+        FederatedLearningError,
+        match="fitres.num_examples.*MetricRecord",
+    ):
+        adapter._fit_result_from_message(message)
+
+
+def test_training_reply_rejects_invalid_metrics_record_type() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    message = _reply_message(
+        content=RecordDict(
+            {
+                FITRES_PARAMETERS_KEY: ArrayRecord.from_numpy_ndarrays(
+                    make_parameters()
+                ),
+                FITRES_NUM_EXAMPLES_KEY: MetricRecord(
+                    {"num_examples": 4}
+                ),
+                FITRES_METRICS_KEY: MetricRecord(
+                    {"accuracy": 0.8}
+                ),
+            }
+        ),
+        message_type=MessageType.TRAIN,
+        node_id=1,
+    )
+
+    with pytest.raises(
+        FederatedLearningError,
+        match="fitres.metrics.*ConfigRecord",
+    ):
+        adapter._fit_result_from_message(message)
+
+
 # ======================================================================
 # Training aggregation
 # ======================================================================
@@ -683,6 +770,61 @@ def test_aggregate_train_returns_none_without_successful_replies() -> None:
     assert metrics is None
 
 
+def test_aggregate_train_ignores_failed_replies() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    failed_request = Message(
+        content=RecordDict(),
+        dst_node_id=1,
+        message_type=MessageType.TRAIN,
+    )
+
+    failed_reply = failed_request.create_error_reply(
+        Error(
+            code=1,
+            reason="simulated client failure",
+        )
+    )
+
+    successful_reply = make_train_reply(
+        node_id=2,
+        parameters=[
+            np.array(
+                [[5.0]],
+                dtype=np.float32,
+            )
+        ],
+        num_examples=4,
+    )
+
+    arrays, metrics = adapter.aggregate_train(
+        server_round=1,
+        replies=[
+            failed_reply,
+            successful_reply,
+        ],
+    )
+
+    assert arrays is not None
+    assert metrics is not None
+
+    aggregated = arrays.to_numpy_ndarrays()
+
+    np.testing.assert_allclose(
+        aggregated[0],
+        np.array(
+            [[5.0]],
+            dtype=np.float32,
+        ),
+    )
+
+    assert metrics["num_examples"] == pytest.approx(
+        4.0
+    )
+
+
 def test_aggregate_train_rejects_duplicate_client_replies() -> None:
     adapter = FedMedFlowerStrategy(
         fedmed_strategy=make_fedmed_strategy(),
@@ -709,6 +851,113 @@ def test_aggregate_train_rejects_duplicate_client_replies() -> None:
 # ======================================================================
 # Evaluation configuration
 # ======================================================================
+
+
+def test_evaluate_reply_rejects_invalid_loss_record_type() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    message = _reply_message(
+        content=RecordDict(
+            {
+                EVALUATERES_LOSS_KEY: ConfigRecord(
+                    {"loss": 0.5}
+                ),
+                EVALUATERES_NUM_EXAMPLES_KEY: MetricRecord(
+                    {"num_examples": 4}
+                ),
+                EVALUATERES_METRICS_KEY: ConfigRecord(
+                    {"accuracy": 0.75}
+                ),
+            }
+        ),
+        message_type=MessageType.EVALUATE,
+        node_id=1,
+    )
+
+    with pytest.raises(
+        FederatedLearningError,
+        match="evaluateres.loss.*MetricRecord",
+    ):
+        adapter._evaluate_result_from_message(message)
+
+
+def test_evaluate_reply_rejects_invalid_num_examples_record_type() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    message = _reply_message(
+        content=RecordDict(
+            {
+                EVALUATERES_LOSS_KEY: MetricRecord(
+                    {"loss": 0.5}
+                ),
+                EVALUATERES_NUM_EXAMPLES_KEY: ConfigRecord(
+                    {}
+                ),
+                EVALUATERES_METRICS_KEY: ConfigRecord(
+                    {"accuracy": 0.75}
+                ),
+            }
+        ),
+        message_type=MessageType.EVALUATE,
+        node_id=1,
+    )
+
+    with pytest.raises(
+        FederatedLearningError,
+        match="evaluateres.num_examples.*MetricRecord",
+    ):
+        adapter._evaluate_result_from_message(message)
+
+
+def test_evaluate_reply_rejects_invalid_metrics_record_type() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    message = _reply_message(
+        content=RecordDict(
+            {
+                EVALUATERES_LOSS_KEY: MetricRecord(
+                    {"loss": 0.5}
+                ),
+                EVALUATERES_NUM_EXAMPLES_KEY: MetricRecord(
+                    {"num_examples": 4}
+                ),
+                EVALUATERES_METRICS_KEY: MetricRecord(
+                    {"accuracy": 0.75}
+                ),
+            }
+        ),
+        message_type=MessageType.EVALUATE,
+        node_id=1,
+    )
+
+    with pytest.raises(
+        FederatedLearningError,
+        match="evaluateres.metrics.*ConfigRecord",
+    ):
+        adapter._evaluate_result_from_message(message)
+
+
+def test_evaluate_reply_rejects_non_finite_loss() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+    )
+
+    message = make_evaluate_reply(
+        node_id=1,
+        loss=float("nan"),
+    )
+
+    with pytest.raises(
+        FederatedLearningError,
+        match="Evaluation loss must be finite",
+    ):
+        adapter._evaluate_result_from_message(message)
 
 
 def test_configure_evaluate_creates_messages() -> None:
