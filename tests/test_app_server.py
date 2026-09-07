@@ -1142,6 +1142,132 @@ def test_create_server_app_accepts_strategy_factory() -> None:
     )
 
 
+def test_create_server_app_reads_flower_runtime_strategy_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class CapturingStrategy(FedMedFlowerStrategy):
+        def __init__(
+            self,
+            fedmed_strategy: FedAvgStrategy,
+            *,
+            fraction_train: float = 1.0,
+            fraction_evaluate: float = 1.0,
+            min_available_nodes: int = 1,
+        ) -> None:
+            captured["fraction_train"] = fraction_train
+            captured["fraction_evaluate"] = fraction_evaluate
+            captured["min_available_nodes"] = min_available_nodes
+            super().__init__(
+                fedmed_strategy,
+                fraction_train=fraction_train,
+                fraction_evaluate=fraction_evaluate,
+                min_available_nodes=min_available_nodes,
+            )
+
+        def start(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.server.FedMedFlowerStrategy",
+        CapturingStrategy,
+    )
+
+    app = create_server_app(
+        lambda context: make_parameters(),
+        num_rounds=1,
+    )
+
+    class FakeContext:
+        run_config = {
+            "num-server-rounds": 2,
+            "fraction-train": 0.5,
+            "fraction-evaluate": 0.75,
+            "min-available-nodes": 2,
+        }
+
+    class FakeGrid:
+        pass
+
+    app._main(FakeGrid(), FakeContext())
+
+    assert captured == {
+        "fraction_train": 0.5,
+        "fraction_evaluate": 0.75,
+        "min_available_nodes": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    ("config_key", "config_value", "expected_message"),
+    [
+        (
+            "fraction-train",
+            0.0,
+            "run_config['fraction-train'] must be",
+        ),
+        (
+            "fraction-train",
+            1.1,
+            "run_config['fraction-train'] must be",
+        ),
+        (
+            "fraction-evaluate",
+            0.0,
+            "run_config['fraction-evaluate'] must be",
+        ),
+        (
+            "fraction-evaluate",
+            1.1,
+            "run_config['fraction-evaluate'] must be",
+        ),
+        (
+            "min-available-nodes",
+            0,
+            "run_config['min-available-nodes'] must be",
+        ),
+    ],
+)
+def test_create_server_app_rejects_invalid_flower_runtime_strategy_config(
+    monkeypatch: pytest.MonkeyPatch,
+    config_key: str,
+    config_value: object,
+    expected_message: str,
+) -> None:
+    class CapturingStrategy(FedMedFlowerStrategy):
+        def start(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.server.FedMedFlowerStrategy",
+        CapturingStrategy,
+    )
+
+    app = create_server_app(
+        lambda context: make_parameters(),
+        num_rounds=1,
+    )
+
+    class FakeContext:
+        run_config = {
+            "num-server-rounds": 1,
+            "fraction-train": 1.0,
+            "fraction-evaluate": 1.0,
+            "min-available-nodes": 1,
+        }
+
+    FakeContext.run_config[config_key] = config_value
+
+    class FakeGrid:
+        pass
+
+    with pytest.raises(FederatedLearningError) as exc_info:
+        app._main(FakeGrid(), FakeContext())
+
+    assert expected_message in str(exc_info.value)
+
+
 # ======================================================================
 # Core architecture isolation
 # ======================================================================

@@ -1233,14 +1233,6 @@ def create_server_app(
             )
 
         # --------------------------------------------------------------
-        # Flower Strategy adapter
-        # --------------------------------------------------------------
-
-        strategy = FedMedFlowerStrategy(
-            fedmed_strategy=fedmed_strategy,
-        )
-
-        # --------------------------------------------------------------
         # Runtime configuration
         # --------------------------------------------------------------
 
@@ -1278,6 +1270,60 @@ def create_server_app(
             )
 
         effective_num_rounds = configured_num_rounds
+
+        configured_fraction_train = run_config.get(
+            "fraction-train",
+            1.0,
+        )
+        configured_fraction_evaluate = run_config.get(
+            "fraction-evaluate",
+            1.0,
+        )
+        configured_min_available_nodes = run_config.get(
+            "min-available-nodes",
+            1,
+        )
+
+        if (
+            not isinstance(configured_fraction_train, (int, float))
+            or isinstance(configured_fraction_train, bool)
+            or not 0.0 < float(configured_fraction_train) <= 1.0
+        ):
+            raise FederatedLearningError(
+                "run_config['fraction-train'] must be "
+                "a number in the range (0, 1]."
+            )
+
+        if (
+            not isinstance(configured_fraction_evaluate, (int, float))
+            or isinstance(configured_fraction_evaluate, bool)
+            or not 0.0 < float(configured_fraction_evaluate) <= 1.0
+        ):
+            raise FederatedLearningError(
+                "run_config['fraction-evaluate'] must be "
+                "a number in the range (0, 1]."
+            )
+
+        if (
+            not isinstance(configured_min_available_nodes, int)
+            or isinstance(configured_min_available_nodes, bool)
+            or configured_min_available_nodes < 1
+        ):
+            raise FederatedLearningError(
+                "run_config['min-available-nodes'] must be "
+                "a positive integer."
+            )
+
+        # --------------------------------------------------------------
+        # Flower Strategy adapter
+        # --------------------------------------------------------------
+
+        strategy = FedMedFlowerStrategy(
+            fedmed_strategy=fedmed_strategy,
+            fraction_train=float(configured_fraction_train),
+            fraction_evaluate=float(configured_fraction_evaluate),
+            min_available_nodes=configured_min_available_nodes,
+        )
 
         train_config = ConfigRecord(
             dict(run_config),
