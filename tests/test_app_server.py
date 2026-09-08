@@ -1013,6 +1013,68 @@ def test_configure_evaluate_creates_messages() -> None:
         )
 
 
+def test_configure_train_applies_fraction_to_selected_nodes() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+        fraction_train=0.5,
+    )
+
+    arrays = ArrayRecord.from_numpy_ndarrays(
+        make_parameters()
+    )
+
+    config = ConfigRecord(
+        {
+            "local_epochs": 1,
+        }
+    )
+
+    messages = list(
+        adapter.configure_train(
+            server_round=3,
+            arrays=arrays,
+            config=config,
+            grid=FakeGrid([1, 2, 3, 4]),
+        )
+    )
+
+    assert [
+        message.metadata.dst_node_id
+        for message in messages
+    ] == [1, 2]
+
+
+def test_configure_evaluate_applies_fraction_to_selected_nodes() -> None:
+    adapter = FedMedFlowerStrategy(
+        fedmed_strategy=make_fedmed_strategy(),
+        fraction_evaluate=0.5,
+    )
+
+    arrays = ArrayRecord.from_numpy_ndarrays(
+        make_parameters()
+    )
+
+    config = ConfigRecord(
+        {
+            "batch_size": 8,
+        }
+    )
+
+    messages = list(
+        adapter.configure_evaluate(
+            server_round=2,
+            arrays=arrays,
+            config=config,
+            grid=FakeGrid([1, 2, 3, 4]),
+        )
+    )
+
+    assert [
+        message.metadata.dst_node_id
+        for message in messages
+    ] == [1, 2]
+
+
 # ======================================================================
 # Evaluation aggregation
 # ======================================================================
