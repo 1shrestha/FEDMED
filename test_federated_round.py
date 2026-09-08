@@ -79,9 +79,9 @@ set_model_parameters(
 
 print("Global model updated using both hospitals.")
 
-print("\n================================")
+print("\n==============================")
 print("DAY 7 FEDERATED ROUND TEST")
-print("================================")
+print("==============================")
 print("Hospitals trained locally: 2")
 print("Global model updated: SUCCESS")
 print("Federated averaging: SUCCESS")
