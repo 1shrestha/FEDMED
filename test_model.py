@@ -1,4 +1,4 @@
-import torch # to be used
+import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
@@ -44,10 +44,9 @@ train(
     epochs=1
 )
 
-test_loss, accuracy = test(
+accuracy = test(
     model,
     testloader
 )
 
-print(f"Test Loss: {test_loss:.4f}")
-print(f"Test Accuracy: {accuracy:.2f}%")
+print(f"Accuracy: {accuracy:.2f}%")
