@@ -27,7 +27,7 @@ clientapp = "app.main:client_app"
 
 [tool.flwr.app.config]
 num-server-rounds = 3
-fraction-train = 1.0
+fraction-train = 0.75
 fraction-evaluate = 1.0
 min-available-nodes = 1
 
