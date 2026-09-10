@@ -505,3 +505,315 @@ A successful state is:
 and:
 
     577 passed, 2 warnings
+
+## Federated Learning Experiments
+
+The following experiments have been completed using the Flower 1.34.0
+multi-node runtime. The experiments are intended to validate FedMed's
+federated-learning behavior under different runtime conditions.
+
+### Experiment Discipline
+
+Each experiment follows a controlled approach:
+
+1. Define the hypothesis or experimental objective.
+2. Keep unrelated configuration variables fixed.
+3. Change only the variable under investigation.
+4. Run the federated training workload.
+5. Record training/evaluation metrics and runtime evidence.
+6. Compare the results and document the observations.
+
+---
+
+### E1 — Baseline Reproducibility
+
+**Objective:** Verify that the same FedMed federated-learning configuration
+produces reproducible results across repeated runs.
+
+Configuration:
+
+    Clients: 2
+    Rounds: 3
+    Train fraction: 1.0
+    Evaluation fraction: 1.0
+    Local epochs: 1
+    Partition: current IID setup
+    Strategy: FedAvgStrategy
+    Aggregator: FedAvgAggregator
+
+The experiment was executed twice using the same configuration.
+
+Round parameter fingerprints:
+
+    Round 1: 5d2399307f878547 -> 166dbbaac8c674b6
+    Round 2: 166dbbaac8c674b6 -> 2c9f2041b7a13ade
+    Round 3: 2c9f2041b7a13ade -> 32346c94ed9fdb6f
+
+Aggregated metrics:
+
+    Train loss:
+        Round 1: 0.8096474260
+        Round 2: 0.8063939661
+        Round 3: 0.8031985164
+
+    Evaluation loss:
+        Round 1: 0.6489310861
+        Round 2: 0.6493559479
+        Round 3: 0.6498010904
+
+    Accuracy:
+        50.00% in every round
+
+    Examples:
+        16 per round
+
+**Result:**
+
+The repeated runs produced the same parameter fingerprints and metrics.
+This validates deterministic/reproducible behavior for the current baseline
+configuration.
+
+---
+
+### E2 — Client Count
+
+**Objective:** Observe federated-learning behavior when the number of
+participating Flower clients changes.
+
+The experiments used 3 federated rounds with 100% training and evaluation
+participation.
+
+#### E2-A — 1 Client
+
+    Training clients per round: 1
+    Evaluation clients per round: 1
+    Examples per round: 8
+
+Metrics:
+
+    Train loss:
+        Round 1: 0.8189847767
+        Round 2: 0.8152351081
+        Round 3: 0.8115414977
+
+    Evaluation loss:
+        Round 1: 0.6616895199
+        Round 2: 0.6618472934
+        Round 3: 0.6620339751
+
+    Accuracy:
+        50.00% in every round
+
+#### E2-B — 2 Clients
+
+    Training clients per round: 2
+    Evaluation clients per round: 2
+    Examples per round: 16
+
+Metrics:
+
+    Train loss:
+        Round 1: 0.8096474260
+        Round 2: 0.8063939661
+        Round 3: 0.8031985164
+
+    Evaluation loss:
+        Round 1: 0.6489310861
+        Round 2: 0.6493559479
+        Round 3: 0.6498010904
+
+    Accuracy:
+        50.00% in every round
+
+#### E2-C — 3 Clients
+
+    Training clients per round: 3
+    Evaluation clients per round: 3
+    Examples per round: 24
+
+Metrics:
+
+    Train loss:
+        Round 1: 0.7625652552
+        Round 2: 0.7611813347
+        Round 3: 0.7598178188
+
+    Evaluation loss:
+        Round 1: 0.6903412938
+        Round 2: 0.6900853515
+        Round 3: 0.6898385584
+
+    Accuracy:
+        41.67% in every round
+
+**Observation:**
+
+Increasing the number of clients did not automatically improve evaluation
+accuracy in the current experiment. The 3-client experiment achieved lower
+training loss but lower evaluation accuracy than the 1- and 2-client runs.
+
+The experiment also changes the total amount of data because each client
+currently contributes 8 examples. Therefore, this experiment measures client
+count together with the corresponding increase in total participating data;
+it does not isolate client count as a completely independent variable.
+
+---
+
+### E3 — Training Client Participation Fraction
+
+**Objective:** Validate Flower training-client fraction selection and observe
+the effect of partial client participation while keeping evaluation
+participation at 100%.
+
+The experiments used:
+
+    Available clients: 4
+    Rounds: 3
+    Evaluation fraction: 1.0
+    Local epochs: 1
+
+The runtime selection logic uses the configured participation fraction to
+select the required number of available Flower nodes.
+
+#### E3-A — 100% Training Participation
+
+    Training fraction: 1.00
+    Training clients: 4
+    Evaluation clients: 4
+    Examples per training round: 32
+
+Metrics:
+
+    Train loss:
+        Round 1: 0.7766701356
+        Round 2: 0.7748080865
+        Round 3: 0.7729736418
+
+    Evaluation loss:
+        Round 1: 0.6831279024
+        Round 2: 0.6829234138
+        Round 3: 0.6827315167
+
+    Accuracy:
+        43.75% in every round
+
+#### E3-B — 75% Training Participation
+
+    Training fraction: 0.75
+    Training clients: 3
+    Evaluation clients: 4
+    Examples per training round: 24
+
+Metrics:
+
+    Train loss:
+        Round 1: 0.7625652552
+        Round 2: 0.7611813347
+        Round 3: 0.7598178188
+
+    Evaluation loss:
+        Round 1: 0.6831628382
+        Round 2: 0.6829900295
+        Round 3: 0.6828266159
+
+    Accuracy:
+        43.75% in every round
+
+#### E3-C — 50% Training Participation
+
+    Training fraction: 0.50
+    Training clients: 2
+    Evaluation clients: 4
+    Examples per training round: 16
+
+Metrics:
+
+    Train loss:
+        Round 1: 0.6990955323
+        Round 2: 0.6990120113
+        Round 3: 0.6989294589
+
+    Evaluation loss:
+        Round 1: 0.6494003683
+        Round 2: 0.6494136974
+        Round 3: 0.6494279876
+
+    Accuracy:
+        Round 1: 56.25%
+        Round 2: 56.25%
+        Round 3: 59.375%
+
+#### E3-D — 25% Training Participation
+
+    Training fraction: 0.25
+    Training clients: 1
+    Evaluation clients: 4
+    Examples per training round: 8
+
+Metrics:
+
+    Train loss:
+        Round 1: 0.7484648526
+        Round 2: 0.7473103702
+        Round 3: 0.7461675704
+
+    Evaluation loss:
+        Round 1: 0.6494098157
+        Round 2: 0.6494439542
+        Round 3: 0.6494901925
+
+    Accuracy:
+        Round 1: 56.25%
+        Round 2: 59.375%
+        Round 3: 59.375%
+
+**Runtime validation:**
+
+    100% -> 4 training clients
+     75% -> 3 training clients
+     50% -> 2 training clients
+     25% -> 1 training client
+
+Evaluation remained at 4 clients for all E3 experiments.
+
+Parameter fingerprints changed across every federated round, confirming that
+the global model parameters continued to evolve during training.
+
+**Observation:**
+
+The participation-fraction mechanism works correctly in the real Flower
+multi-node runtime. Lower participation did not cause runtime or aggregation
+failures in these experiments.
+
+The 50% and 25% experiments produced higher evaluation accuracy than the
+100% and 75% experiments in these particular runs. This should not be
+interpreted as evidence that lower participation is inherently better.
+Client selection is deterministic in the current implementation, and
+different participation fractions result in different sets of training
+clients. More controlled repetitions would therefore be required to
+attribute performance differences specifically to the participation
+fraction.
+
+Runtime measurements were also recorded, but the runs experienced Flower
+logstream reconnections and startup overhead. Therefore, runtime differences
+should not be treated as a clean measurement of participation-efficiency
+scaling.
+
+---
+
+## Experiment Status
+
+Completed:
+
+    E1 — Baseline Reproducibility              [COMPLETED]
+    E2 — Client Count                          [COMPLETED]
+    E3 — Training Client Participation Fraction [COMPLETED]
+
+Planned:
+
+    E4 — Number of Federated Rounds
+    E5 — IID vs Non-IID Data
+    E6 — Client Failure / Dropout
+    E7 — Local Epochs
+    E8 — Data Imbalance
+    E9 — Centralized vs Federated Training
