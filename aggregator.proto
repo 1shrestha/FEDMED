@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package aggregator;
+
+service Aggregator {
+    rpc Average(AverageRequest) returns (AverageResponse);
+}
+
+message AverageRequest {
+    bytes flat_weights = 1;   // float64 little-endian bytes
+    int32 n_clients    = 2;   // divisor
+}
+
+message AverageResponse {
+    bytes flat_result = 1;    // float64 little-endian bytes
+}
