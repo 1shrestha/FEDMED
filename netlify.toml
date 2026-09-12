@@ -1,0 +1,14 @@
+[build]
+  base = "dashboard"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA fallback - not strictly required for this single-page dashboard, but
+# harmless if you later add client-side routes.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
