@@ -1,14 +1,22 @@
-FROM python:3.12-slim
+# Deploys the central FL aggregation server + live metrics WebSocket.
+# Build & run from the REPO ROOT (needs access to model/, data/, privacy/, federated/):
+#   docker build -f backend/Dockerfile -t fedmed-backend .
+#   docker run -p 8080:8080 -p 8765:8765 fedmed-backend
+FROM python:3.11-slim
 
 WORKDIR /app
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY proto/ proto/
-RUN python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/coordination.proto
+COPY model/ model/
+COPY data/ data/
+COPY privacy/ privacy/
+COPY federated/ federated/
+COPY backend/entrypoint.sh entrypoint.sh
+RUN chmod +x entrypoint.sh
 
-COPY *.py .
+# 8080 = Flower gRPC (hospital nodes connect here)
+# 8765 = WebSocket metrics stream (dashboard connects here)
+EXPOSE 8080 8765
 
-EXPOSE 8001
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["./entrypoint.sh"]

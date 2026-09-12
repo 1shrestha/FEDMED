@@ -1,63 +1,14 @@
-version: "3.9"
-
+# Local smoke test of the deployment container before pushing to a cloud VM:
+#   docker compose -f backend/docker-compose.yml up --build
 services:
-  postgres:
-    image: postgres:16-alpine
+  fedmed-backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8080:8080"
+      - "8765:8765"
     environment:
-      POSTGRES_USER: fedmed
-      POSTGRES_PASSWORD: fedmed
-      POSTGRES_DB: fedmed
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fedmed"]
-      interval: 2s
-      timeout: 3s
-      retries: 10
-
-  api:
-    build: .
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://fedmed:fedmed@postgres:5432/fedmed
-      FLOWER_SERVER_ADDRESS: flower-server:8080   # placeholder — Flower's actual server, not this repo
-    ports:
-      - "8001:8001"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/nodes/live')"]
-      interval: 2s
-      timeout: 3s
-      retries: 15
-      start_period: 5s
-
-  node1:
-    build: .
-    depends_on:
-      api:
-        condition: service_healthy
-    command: ["python", "mock_node.py", "--port", "9001", "--hospital", "General Hospital",
-              "--registry-url", "http://api:8001", "--advertise-host", "node1"]
-    ports:
-      - "9001:9001"
-
-  node2:
-    build: .
-    depends_on:
-      api:
-        condition: service_healthy
-    command: ["python", "mock_node.py", "--port", "9002", "--hospital", "St. Mary's",
-              "--registry-url", "http://api:8001", "--advertise-host", "node2"]
-    ports:
-      - "9002:9002"
-
-  node3:
-    build: .
-    depends_on:
-      api:
-        condition: service_healthy
-    command: ["python", "mock_node.py", "--port", "9003", "--hospital", "City Clinic",
-              "--registry-url", "http://api:8001", "--advertise-host", "node3"]
-    ports:
-      - "9003:9003"
+      - FL_ROUNDS=5
+      - FL_N_CLIENTS=3
+      - FL_MIN_CLIENTS=2

@@ -1,0 +1,12 @@
+# Optional: PaaS-friendly deploy of JUST the metrics WebSocket relay
+# (Render/Railway free tiers handle HTTP/WS well; Flower's raw gRPC server
+# is better suited to a small VM — see README "Deploying the FL server" for why).
+services:
+  - type: web
+    name: fedmed-metrics-ws
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python federated/ws_metrics_server.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
