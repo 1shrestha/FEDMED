@@ -32,6 +32,8 @@ from app.client import create_client_app
 from app.server import create_server_app
 from src.aggregation.fedavg import FedAvgAggregator
 from src.common.config import load_config
+from src.data.dataset import FedMedDataset
+from src.data.partitioner import partition_dataset
 from src.fl.client import FederatedClient
 from src.fl.strategy import FedAvgStrategy
 from src.models.base_model import BaseModel
@@ -54,29 +56,66 @@ class FedMedOrchestrator:
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
 
-        self._training_config = load_config().training
+        config = load_config()
+        self._training_config = config.training
+        self._data_config = config.data
 
     # ------------------------------------------------------------------
     # DATA
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _create_loader(client_id: str, *, size: int = 8) -> DataLoader:
-        """Create deterministic local smoke-test data for one client."""
-        if size < 2 or size % 2 != 0:
-            raise ValueError("size must be an even integer >= 2")
+    def _create_partitioned_loader(
+        self,
+        partition_index: int,
+        *,
+        seed: int = 42,
+    ) -> DataLoader:
+        """Create a deterministic DataLoader from a configured partition."""
 
-        client_offset = sum(ord(c) for c in client_id) % 10
+        num_clients = self._data_config.num_clients
+
+        if partition_index < 0 or partition_index >= num_clients:
+            raise ValueError(
+                f"partition index {partition_index} is outside "
+                f"configured range 0..{num_clients - 1}"
+            )
+
+        size = num_clients * 8
 
         generator = torch.Generator()
-        generator.manual_seed(42 + client_offset)
+        generator.manual_seed(seed)
 
         samples = torch.randn(size, 2, generator=generator)
-        targets = torch.tensor([0, 1] * (size // 2), dtype=torch.long)
+        targets = torch.tensor(
+            [0, 1] * (size // 2),
+            dtype=torch.long,
+        )
+
+        dataset = FedMedDataset(
+            samples=samples,
+            targets=targets,
+            name="flower_smoke_global",
+        )
+
+        partitions = partition_dataset(
+            dataset,
+            num_clients=num_clients,
+            strategy=self._data_config.partition_type,
+            seed=seed,
+        )
+
+        partition = partitions[f"client_{partition_index}"]
+
+        print(
+            f"[FedMed] partition assembled: "
+            f"{partition.client_id} "
+            f"strategy={self._data_config.partition_type} "
+            f"samples={len(partition.dataset)}"
+        )
 
         return DataLoader(
-            TensorDataset(samples, targets),
-            batch_size=4,
+            partition.dataset,
+            batch_size=self._training_config.batch_size,
             shuffle=False,
         )
 
@@ -115,8 +154,21 @@ class FedMedOrchestrator:
             metrics=[Accuracy()],
         )
 
-        train_loader = self._create_loader(client_id, size=8)
-        eval_loader = self._create_loader(f"{client_id}_eval", size=8)
+        if client_id == "initial":
+            train_loader = self._create_partitioned_loader(0)
+            eval_loader = self._create_partitioned_loader(0)
+        else:
+            try:
+                node_id = int(client_id.rsplit("_", 1)[1])
+            except (ValueError, IndexError) as exc:
+                raise ValueError(
+                    f"client_id must end with a numeric node id: {client_id!r}"
+                ) from exc
+
+            partition_index = node_id % self._data_config.num_clients
+
+            train_loader = self._create_partitioned_loader(partition_index)
+            eval_loader = self._create_partitioned_loader(partition_index)
 
         client = FederatedClient(
             client_id=client_id,

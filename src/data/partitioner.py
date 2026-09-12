@@ -36,8 +36,12 @@ from src.common.exceptions import DataError
 from src.data.dataset import FedMedDataset
 
 IID_STRATEGY = "iid"
+LABEL_SKEW_STRATEGY = "label_skew"
 
-SUPPORTED_STRATEGIES: tuple[str, ...] = (IID_STRATEGY,)
+SUPPORTED_STRATEGIES: tuple[str, ...] = (
+    IID_STRATEGY,
+    LABEL_SKEW_STRATEGY,
+)
 
 
 class PartitionView(Dataset):
@@ -215,7 +219,7 @@ def _validate_strategy(strategy: str) -> None:
 
 
 def _assign_indices_iid(
-    dataset_size: int,
+    dataset: FedMedDataset,
     num_clients: int,
     seed: int | None,
 ) -> list[tuple[int, ...]]:
@@ -242,6 +246,7 @@ def _assign_indices_iid(
         exhaustive and non-overlapping.
     """
 
+    dataset_size = len(dataset)
     rng = np.random.default_rng(seed)
     shuffled_indices = rng.permutation(dataset_size)
     chunks = np.array_split(shuffled_indices, num_clients)
@@ -249,8 +254,83 @@ def _assign_indices_iid(
     return [tuple(int(global_index) for global_index in chunk) for chunk in chunks]
 
 
-_STRATEGIES: dict[str, Callable[[int, int, int | None], list[tuple[int, ...]]]] = {
+def _assign_indices_label_skew(
+    dataset: FedMedDataset,
+    num_clients: int,
+    seed: int | None,
+) -> list[tuple[int, ...]]:
+    """
+    Compute a deterministic label-skew assignment of global indices.
+
+    Samples are grouped by target value and shuffled with a local RNG.
+    Clients are deterministically assigned to label groups, and each
+    label group is split among its assigned clients. This creates
+    strongly label-skewed client datasets while preserving complete,
+    non-overlapping index coverage.
+    """
+
+    rng = np.random.default_rng(seed)
+
+    label_to_indices: dict[Any, list[int]] = {}
+
+    for index in range(len(dataset)):
+        target = dataset[index][1]
+
+        # Normalize scalar tensor/array labels to their underlying
+        # Python scalar so equal labels are grouped together.
+        item = getattr(target, "item", None)
+        if callable(item):
+            try:
+                target = item()
+            except (ValueError, RuntimeError):
+                pass
+
+        try:
+            label_to_indices.setdefault(target, []).append(index)
+        except TypeError as exc:
+            raise DataError(
+                "label_skew requires hashable target values."
+            ) from exc
+
+    if len(label_to_indices) < 2:
+        raise DataError(
+            "label_skew requires at least two distinct target values."
+        )
+
+    labels = list(label_to_indices)
+
+    # Keep the strategy balanced across labels. For the current
+    # binary experiment, four clients become two clients per label.
+    client_groups = np.array_split(
+        np.arange(num_clients),
+        len(labels),
+    )
+
+    clients: list[list[int]] = [[] for _ in range(num_clients)]
+
+    for label_index, label in enumerate(labels):
+        indices = label_to_indices[label]
+        rng.shuffle(indices)
+
+        assigned_clients = [
+            int(client_index)
+            for client_index in client_groups[label_index]
+        ]
+
+        label_chunks = np.array_split(indices, len(assigned_clients))
+
+        for client_index, chunk in zip(assigned_clients, label_chunks):
+            clients[client_index].extend(int(index) for index in chunk)
+
+    return [tuple(indices) for indices in clients]
+
+
+_STRATEGIES: dict[
+    str,
+    Callable[[FedMedDataset, int, int | None], list[tuple[int, ...]]],
+] = {
     IID_STRATEGY: _assign_indices_iid,
+    LABEL_SKEW_STRATEGY: _assign_indices_label_skew,
 }
 
 
@@ -304,7 +384,7 @@ def partition_dataset(
     _validate_seed(seed)
 
     assign_indices = _STRATEGIES[strategy]
-    index_chunks = assign_indices(dataset_size, num_clients, seed)
+    index_chunks = assign_indices(dataset, num_clients, seed)
 
     dataset_name = dataset.metadata["name"]
     partitions: dict[str, ClientPartition] = {}

@@ -24,7 +24,7 @@ model:
 
 data:
   root_dir: ./data
-  num_clients: 2
+  num_clients: 4
   partition_type: iid
 
 server:

@@ -396,3 +396,110 @@ def test_partition_view_out_of_range_negative_index_rejected(
 
     with pytest.raises(DataError):
         partition_view[-4]
+def test_label_skew_partition_produces_different_label_distributions(
+    dataset: FedMedDataset,
+) -> None:
+    """Label-skew partitioning must create different client label distributions."""
+
+    partitions = partition_dataset(
+        dataset,
+        num_clients=4,
+        strategy="label_skew",
+        seed=42,
+    )
+
+    client_label_counts = []
+
+    for partition in partitions.values():
+        labels = [dataset[index][1] for index in partition.indices]
+        client_label_counts.append(
+            (labels.count(0), labels.count(1))
+        )
+
+    # Each client should have a strongly dominant label under label skew.
+    dominant_label_ratios = [
+        max(class_zero, class_one) / (class_zero + class_one)
+        for class_zero, class_one in client_label_counts
+    ]
+
+    assert all(ratio >= 0.80 for ratio in dominant_label_ratios)
+
+def test_label_skew_partition_has_complete_coverage(
+    dataset: FedMedDataset,
+) -> None:
+    """Label-skew partitioning must assign every global index exactly once."""
+
+    partitions = partition_dataset(
+        dataset,
+        num_clients=4,
+        strategy="label_skew",
+        seed=42,
+    )
+
+    all_indices = [
+        index
+        for partition in partitions.values()
+        for index in partition.indices
+    ]
+
+    assert sorted(all_indices) == list(range(len(dataset)))
+    assert len(all_indices) == len(set(all_indices))
+
+
+def test_label_skew_partition_has_no_overlap(
+    dataset: FedMedDataset,
+) -> None:
+    """Label-skew partitions must not share global indices."""
+
+    partitions = partition_dataset(
+        dataset,
+        num_clients=4,
+        strategy="label_skew",
+        seed=42,
+    )
+
+    index_sets = [
+        set(partition.indices)
+        for partition in partitions.values()
+    ]
+
+    for first in range(len(index_sets)):
+        for second in range(first + 1, len(index_sets)):
+            assert index_sets[first].isdisjoint(index_sets[second])
+
+
+def test_label_skew_partition_clients_non_empty(
+    dataset: FedMedDataset,
+) -> None:
+    """Every client must receive samples under label skew."""
+
+    partitions = partition_dataset(
+        dataset,
+        num_clients=4,
+        strategy="label_skew",
+        seed=42,
+    )
+
+    assert all(len(partition.indices) > 0 for partition in partitions.values())
+
+
+def test_label_skew_partition_is_deterministic(
+    dataset: FedMedDataset,
+) -> None:
+    """The same label-skew seed must reproduce the same assignment."""
+
+    first = partition_dataset(
+        dataset,
+        num_clients=4,
+        strategy="label_skew",
+        seed=42,
+    )
+    second = partition_dataset(
+        dataset,
+        num_clients=4,
+        strategy="label_skew",
+        seed=42,
+    )
+
+    for client_id in first:
+        assert first[client_id].indices == second[client_id].indices
