@@ -44,9 +44,10 @@ train(
     epochs=1
 )
 
-accuracy = test(
+test_loss, accuracy = test(
     model,
     testloader
 )
 
-print(f"Accuracy: {accuracy:.2f}%")
+print(f"Test Loss: {test_loss:.4f}")
+print(f"Test Accuracy: {accuracy:.2f}%")
