@@ -123,7 +123,12 @@ class FedMedOrchestrator:
     # CLIENT ASSEMBLY
     # ------------------------------------------------------------------
 
-    def build_client(self, client_id: str) -> FederatedClient:
+    def build_client(
+        self,
+        client_id: str,
+        *,
+        partition_index: int | None = None,
+    ) -> FederatedClient:
         """Build one complete FedMed client dependency graph."""
         if not isinstance(client_id, str) or not client_id.strip():
             raise ValueError("client_id must be a non-empty string")
@@ -155,9 +160,8 @@ class FedMedOrchestrator:
         )
 
         if client_id == "initial":
-            train_loader = self._create_partitioned_loader(0)
-            eval_loader = self._create_partitioned_loader(0)
-        else:
+            partition_index = 0
+        elif partition_index is None:
             try:
                 node_id = int(client_id.rsplit("_", 1)[1])
             except (ValueError, IndexError) as exc:
@@ -167,8 +171,8 @@ class FedMedOrchestrator:
 
             partition_index = node_id % self._data_config.num_clients
 
-            train_loader = self._create_partitioned_loader(partition_index)
-            eval_loader = self._create_partitioned_loader(partition_index)
+        train_loader = self._create_partitioned_loader(partition_index)
+        eval_loader = self._create_partitioned_loader(partition_index)
 
         client = FederatedClient(
             client_id=client_id,
@@ -207,7 +211,15 @@ class FedMedOrchestrator:
 
         def client_factory(context: Any) -> FederatedClient:
             node_id = str(context.node_id)
-            return self.build_client(f"client_{node_id}")
+
+            partition_index = int(
+                context.node_config["partition-id"]
+            )
+
+            return self.build_client(
+                f"client_{node_id}",
+                partition_index=partition_index,
+            )
 
         return create_client_app(client_factory)
 
