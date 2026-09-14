@@ -800,19 +800,18 @@ should not be treated as a clean measurement of participation-efficiency
 scaling.
 
 ---
-
-## Experiment Status
+Experiment Status
 
 Completed:
 
-    E1 — Baseline Reproducibility              [COMPLETED]
-    E2 — Client Count                          [COMPLETED]
+    E1 — Baseline Reproducibility               [COMPLETED]
+    E2 — Client Count                           [COMPLETED]
     E3 — Training Client Participation Fraction [COMPLETED]
+    E4 — Number of Federated Rounds             [COMPLETED]
+    E5 — IID vs Non-IID Data                    [IN PROGRESS]
 
 Planned:
 
-    E4 — Number of Federated Rounds
-    E5 — IID vs Non-IID Data
     E6 — Client Failure / Dropout
     E7 — Local Epochs
     E8 — Data Imbalance
