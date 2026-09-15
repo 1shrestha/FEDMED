@@ -808,11 +808,62 @@ Completed:
     E2 — Client Count                           [COMPLETED]
     E3 — Training Client Participation Fraction [COMPLETED]
     E4 — Number of Federated Rounds             [COMPLETED]
-    E5 — IID vs Non-IID Data                    [IN PROGRESS]
+    E5 — IID vs Non-IID Data                    [COMPLETED]
+    E6 — Client Failure / Dropout               [COMPLETED]
+
+### E6 — Client Failure / Dropout Results
+
+**Configuration**
+
+    Flower SuperNodes: 4
+    Partitions: 0, 1, 2, 3
+    Training participation: 100%
+    Evaluation participation: 100%
+    Federated rounds: 3
+    Data partitioning: IID
+    Controlled failure: partition 0 during Round 2
+    Failure scope: TRAIN only
+
+**Observed results**
+
+| Round | Successful training clients | Training examples | Train loss | Eval loss | Accuracy |
+|---|---:|---:|---:|---:|---:|
+| 1 | 4/4 | 32 | 0.687063 | 0.686760 | 0.5000 |
+| 2 | 3/4 | 24 | 0.701005 | 0.686616 | 0.5000 |
+| 3 | 4/4 | 32 | 0.686734 | 0.686436 | 0.5000 |
+
+**Parameter fingerprints**
+
+| Round | Input | Output |
+|---|---|---|
+| 1 | `5d2399307f878547` | `25b09817ca2394e1` |
+| 2 | `25b09817ca2394e1` | `fdfe7049db24c893` |
+| 3 | `fdfe7049db24c893` | `9ad410e9f5e5b295` |
+
+**Failure handling evidence**
+
+During Round 2, partition 0 raised the controlled E6 failure:
+
+    E6 controlled client dropout: partition=0, round=2
+
+The Flower server received the failed training reply and ignored it:
+
+    ignoring failed training reply from node 5740701070240325215
+
+Aggregation then continued:
+
+    Delegating Flower training aggregation to FedMed Strategy for round 2.
+    ROUND 2 OUTPUT fingerprint=fdfe7049db24c893
+
+Round 2 therefore completed using the three successful training clients. Evaluation still used all four clients, and Round 3 returned to 4/4 successful training clients.
+
+**Conclusion**
+
+E6 successfully demonstrates controlled client-failure tolerance in the Flower runtime. A training client can fail during a federated round without aborting the round: the failed reply is ignored, the remaining successful client updates are aggregated, evaluation continues normally, and subsequent rounds proceed successfully.
+
 
 Planned:
 
-    E6 — Client Failure / Dropout
     E7 — Local Epochs
     E8 — Data Imbalance
     E9 — Centralized vs Federated Training

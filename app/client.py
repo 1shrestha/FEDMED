@@ -7,6 +7,9 @@ import numpy as np
 from flwr.app import Context
 from flwr.client import NumPyClient
 from flwr.clientapp import ClientApp
+from flwr.clientapp.client_app import Mod
+
+from app.failure_mod import e6_dropout_mod
 
 from src.common.exceptions import FederatedLearningError
 from src.fl.client import FederatedClient
@@ -136,6 +139,8 @@ FederatedClientFactory = Callable[[Context], FederatedClient]
 
 def create_client_app(
     client_factory: FederatedClientFactory,
+    *,
+    mods: list[Mod] | None = None,
 ) -> ClientApp:
     """Create a Flower ClientApp around a FedMed client factory.
 
@@ -155,7 +160,13 @@ def create_client_app(
             federated_client
         ).to_client()
 
-    return ClientApp(client_fn=client_fn)
+    client_mods = list(mods or [])
+    client_mods.append(e6_dropout_mod)
+
+    return ClientApp(
+        client_fn=client_fn,
+        mods=client_mods,
+    )
 
 
 __all__ = [
