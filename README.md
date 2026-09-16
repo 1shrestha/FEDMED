@@ -867,3 +867,75 @@ Planned:
     E7 — Local Epochs
     E8 — Data Imbalance
     E9 — Centralized vs Federated Training
+
+
+### E7 — Local Epochs
+
+E7 evaluates the effect of the number of local training epochs performed by
+each federated client while keeping the federated runtime configuration fixed.
+
+**Planned configurations**
+
+    E7-A → local_epochs = 1
+    E7-B → local_epochs = 2
+    E7-C → local_epochs = 5
+
+**Fixed configuration**
+
+    Flower SuperNodes: 4
+    Partitions: 0, 1, 2, 3
+    Training participation: 100%
+    Evaluation participation: 100%
+    Federated rounds: 3
+    Data partitioning: IID
+    Batch size: 4
+    Learning rate: 0.01
+    Optimizer: SGD
+    Seed: 42
+    Controlled failure: disabled
+
+### E7-A — Local Epochs = 1
+
+**Configuration**
+
+    Local epochs: 1
+    Flower SuperNodes: 4
+    Training clients per round: 4/4
+    Evaluation clients per round: 4/4
+    Training examples per round: 32
+
+**Observed results**
+
+| Round | Local Epochs | Train Loss | Eval Loss | Accuracy | Train Examples |
+|---|---:|---:|---:|---:|---:|
+| 1 | 1 | 0.687063 | 0.686760 | 0.5000 | 32 |
+| 2 | 1 | 0.686876 | 0.686577 | 0.5000 | 32 |
+| 3 | 1 | 0.686694 | 0.686398 | 0.5000 | 32 |
+
+**Parameter fingerprints**
+
+| Round | Input | Output |
+|---|---|---|
+| 1 | `5d2399307f878547` | `25b09817ca2394e1` |
+| 2 | `25b09817ca2394e1` | `8d8daa3109b91d4d` |
+| 3 | `8d8daa3109b91d4d` | `e668691dd739dc09` |
+
+**Client-side training metrics**
+
+    Round 1: batches_processed=2, epochs_completed=1, num_examples=32
+    Round 2: batches_processed=2, epochs_completed=1, num_examples=32
+    Round 3: batches_processed=2, epochs_completed=1, num_examples=32
+
+**Runtime**
+
+    Strategy execution time: 250.32s
+
+**Conclusion**
+
+E7-A completed successfully with one local training epoch per client.
+All four clients successfully participated in training and evaluation for
+all three federated rounds. Parameter fingerprints advanced correctly across
+rounds, and the reported client-side metric `epochs_completed` was 1.0 for
+each round.
+
+E7-B and E7-C will vary only the local epoch count to 2 and 5 respectively.
