@@ -868,13 +868,12 @@ Planned:
     E8 — Data Imbalance
     E9 — Centralized vs Federated Training
 
-
 ### E7 — Local Epochs
 
-E7 evaluates the effect of the number of local training epochs performed by
-each federated client while keeping the federated runtime configuration fixed.
+E7 evaluates the effect of local training epochs on the federated learning
+workflow while keeping the federated runtime configuration fixed.
 
-**Planned configurations**
+**Configurations**
 
     E7-A → local_epochs = 1
     E7-B → local_epochs = 2
@@ -894,19 +893,9 @@ each federated client while keeping the federated runtime configuration fixed.
     Seed: 42
     Controlled failure: disabled
 
-### E7-A — Local Epochs = 1
+#### E7-A — Local Epochs = 1
 
-**Configuration**
-
-    Local epochs: 1
-    Flower SuperNodes: 4
-    Training clients per round: 4/4
-    Evaluation clients per round: 4/4
-    Training examples per round: 32
-
-**Observed results**
-
-| Round | Local Epochs | Train Loss | Eval Loss | Accuracy | Train Examples |
+| Round | Epochs | Train Loss | Eval Loss | Accuracy | Train Examples |
 |---|---:|---:|---:|---:|---:|
 | 1 | 1 | 0.687063 | 0.686760 | 0.5000 | 32 |
 | 2 | 1 | 0.686876 | 0.686577 | 0.5000 | 32 |
@@ -920,22 +909,71 @@ each federated client while keeping the federated runtime configuration fixed.
 | 2 | `25b09817ca2394e1` | `8d8daa3109b91d4d` |
 | 3 | `8d8daa3109b91d4d` | `e668691dd739dc09` |
 
-**Client-side training metrics**
+Runtime: **250.32s**
 
-    Round 1: batches_processed=2, epochs_completed=1, num_examples=32
-    Round 2: batches_processed=2, epochs_completed=1, num_examples=32
-    Round 3: batches_processed=2, epochs_completed=1, num_examples=32
+Client-side metrics confirmed `epochs_completed = 1`,
+`batches_processed = 2`, and `num_examples = 32` per round.
 
-**Runtime**
+#### E7-B — Local Epochs = 2
 
-    Strategy execution time: 250.32s
+| Round | Epochs | Train Loss | Eval Loss | Accuracy | Train Examples |
+|---|---:|---:|---:|---:|---:|
+| 1 | 2 | 0.683617 | 0.686575 | 0.5000 | 64 |
+| 2 | 2 | 0.683248 | 0.686220 | 0.5000 | 64 |
+| 3 | 2 | 0.682896 | 0.685882 | 0.5000 | 64 |
 
-**Conclusion**
+**Parameter fingerprints**
 
-E7-A completed successfully with one local training epoch per client.
-All four clients successfully participated in training and evaluation for
-all three federated rounds. Parameter fingerprints advanced correctly across
-rounds, and the reported client-side metric `epochs_completed` was 1.0 for
-each round.
+| Round | Input | Output |
+|---|---|---|
+| 1 | `5d2399307f878547` | `a2a88244ee48d7e9` |
+| 2 | `a2a88244ee48d7e9` | `6434ec3385c1ca86` |
+| 3 | `6434ec3385c1ca86` | `ca732d9ce8ca8362` |
 
-E7-B and E7-C will vary only the local epoch count to 2 and 5 respectively.
+Runtime: **250.24s**
+
+Client-side metrics confirmed `epochs_completed = 2`,
+`batches_processed = 4`, and `num_examples = 64` per round.
+
+#### E7-C — Local Epochs = 5
+
+| Round | Epochs | Train Loss | Eval Loss | Accuracy | Train Examples |
+|---|---:|---:|---:|---:|---:|
+| 1 | 5 | 0.673805 | 0.686037 | 0.5000 | 160 |
+| 2 | 5 | 0.672913 | 0.685231 | 0.5000 | 160 |
+| 3 | 5 | 0.672117 | 0.684518 | 0.5000 | 160 |
+
+**Parameter fingerprints**
+
+| Round | Input | Output |
+|---|---|---|
+| 1 | `5d2399307f878547` | `1b889617a072c9a9` |
+| 2 | `1b889617a072c9a9` | `0bb514318ba100d0` |
+| 3 | `0bb514318ba100d0` | `c08dc578e6a33acf` |
+
+Runtime: **311.00s**
+
+Client-side metrics confirmed `epochs_completed = 5`,
+`batches_processed = 10`, and `num_examples = 160` per round.
+
+#### E7 Summary
+
+| Metric | E7-A: 1 Epoch | E7-B: 2 Epochs | E7-C: 5 Epochs |
+|---|---:|---:|---:|
+| Final train loss | 0.686694 | 0.682896 | 0.672117 |
+| Final eval loss | 0.686398 | 0.685882 | 0.684518 |
+| Accuracy | 0.5000 | 0.5000 | 0.5000 |
+| Train examples/round | 32 | 64 | 160 |
+| Batches/client | 2 | 4 | 10 |
+| Runtime | 250.32s | 250.24s | 311.00s |
+
+Across these runs, increasing local epochs was associated with lower training
+loss and slightly lower evaluation loss, while measured accuracy remained
+0.5000. The 5-epoch run required more measured execution time. These are
+observations from this experimental configuration and are not treated as
+general conclusions about local epoch selection.
+
+All three E7 configurations completed all three federated rounds with 4/4
+training clients and 4/4 evaluation clients participating in every round.
+Parameter fingerprints advanced across every round, confirming continued
+global model updates.

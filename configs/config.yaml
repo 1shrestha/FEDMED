@@ -12,7 +12,7 @@ federated:
   fraction_evaluate: 1.0
 
 training:
-  local_epochs: 1
+  local_epochs: 5
   batch_size: 4
   learning_rate: 0.01
   optimizer: sgd
