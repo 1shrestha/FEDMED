@@ -67,7 +67,7 @@ print("Local model parameters updated.")
 
 print("\n==============================")
 print("FEDERATED UPDATE TEST")
-print("==============================")
+print("================================")
 print("Global parameters:", len(global_parameters))
 print("Updated parameters:", len(updated_parameters))
 print("Parameter update generated successfully.")
