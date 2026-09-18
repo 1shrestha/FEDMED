@@ -33,7 +33,7 @@ from app.server import create_server_app
 from src.aggregation.fedavg import FedAvgAggregator
 from src.common.config import load_config
 from src.data.dataset import FedMedDataset
-from src.data.partitioner import partition_dataset
+from src.data.partitioner import PartitionView, partition_dataset
 from src.fl.client import FederatedClient
 from src.fl.strategy import FedAvgStrategy
 from src.models.base_model import BaseModel
@@ -69,8 +69,9 @@ class FedMedOrchestrator:
         partition_index: int,
         *,
         seed: int = 42,
+        split: str = "train",
     ) -> DataLoader:
-        """Create a deterministic DataLoader from a configured partition."""
+        """Create a deterministic DataLoader for a Flower experiment split."""
 
         num_clients = self._data_config.num_clients
 
@@ -80,7 +81,20 @@ class FedMedOrchestrator:
                 f"configured range 0..{num_clients - 1}"
             )
 
-        size = num_clients * 8
+        if split not in {"train", "eval"}:
+            raise ValueError(
+                f"split must be 'train' or 'eval', got {split!r}"
+            )
+
+        if num_clients != 4:
+            raise ValueError(
+                "E8 data imbalance requires exactly 4 configured clients."
+            )
+
+        # E8 intentionally varies training-data quantity while keeping
+        # evaluation-data quantity balanced.
+        sizes = (4, 8, 8, 12) if split == "train" else (8, 8, 8, 8)
+        size = sum(sizes)
 
         generator = torch.Generator()
         generator.manual_seed(seed)
@@ -94,27 +108,38 @@ class FedMedOrchestrator:
         dataset = FedMedDataset(
             samples=samples,
             targets=targets,
-            name="flower_smoke_global",
+            name=f"flower_smoke_{split}_global",
         )
 
-        partitions = partition_dataset(
-            dataset,
-            num_clients=num_clients,
-            strategy=self._data_config.partition_type,
-            seed=seed,
-        )
+        if self._data_config.partition_type == "iid":
+            start = sum(sizes[:partition_index])
+            end = start + sizes[partition_index]
+            indices = tuple(range(start, end))
+        else:
+            partitions = partition_dataset(
+                dataset,
+                num_clients=num_clients,
+                strategy=self._data_config.partition_type,
+                seed=seed,
+            )
+            indices = partitions[f"client_{partition_index}"].indices
 
-        partition = partitions[f"client_{partition_index}"]
+        partition = PartitionView(
+            dataset=dataset,
+            indices=indices,
+            client_id=f"client_{partition_index}",
+        )
 
         print(
             f"[FedMed] partition assembled: "
-            f"{partition.client_id} "
+            f"client_{partition_index} "
+            f"split={split} "
             f"strategy={self._data_config.partition_type} "
-            f"samples={len(partition.dataset)}"
+            f"samples={len(partition)}"
         )
 
         return DataLoader(
-            partition.dataset,
+            partition,
             batch_size=self._training_config.batch_size,
             shuffle=False,
         )

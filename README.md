@@ -864,8 +864,6 @@ E6 successfully demonstrates controlled client-failure tolerance in the Flower r
 
 Planned:
 
-    E7 — Local Epochs
-    E8 — Data Imbalance
     E9 — Centralized vs Federated Training
 
 ### E7 — Local Epochs
@@ -977,3 +975,76 @@ All three E7 configurations completed all three federated rounds with 4/4
 training clients and 4/4 evaluation clients participating in every round.
 Parameter fingerprints advanced across every round, confirming continued
 global model updates.
+
+### E8 — Data Quantity Imbalance
+
+E8 evaluates federated training with unequal quantities of local training data
+while keeping evaluation data balanced. The purpose is to exercise the
+existing example-weighted aggregation path under heterogeneous client data
+sizes.
+
+**Configuration**
+
+    Flower SuperNodes: 4
+    Partitions: 0, 1, 2, 3
+    Training participation: 100%
+    Evaluation participation: 100%
+    Federated rounds: 3
+    Data partitioning: IID
+    Local epochs: 5
+    Batch size: 4
+    Learning rate: 0.01
+    Optimizer: SGD
+    Seed: 42
+    Controlled failure: disabled
+
+**Training-data distribution**
+
+    client_0 → 4 examples
+    client_1 → 8 examples
+    client_2 → 8 examples
+    client_3 → 12 examples
+
+    Total → 32 examples
+
+Evaluation data remained balanced:
+
+    client_0 → 8 examples
+    client_1 → 8 examples
+    client_2 → 8 examples
+    client_3 → 8 examples
+
+    Total → 32 examples
+
+#### E8 Results
+
+| Round | Train Loss | Eval Loss | Accuracy | Eval Examples |
+|---|---:|---:|---:|---:|
+| 1 | 0.680932 | 0.686110 | 0.5000 | 32 |
+| 2 | 0.680199 | 0.685398 | 0.5000 | 32 |
+| 3 | 0.679574 | 0.684794 | 0.5000 | 32 |
+
+**Parameter fingerprints**
+
+| Round | Input | Output |
+|---|---|---|
+| 1 | `5d2399307f878547` | `74f3bd54e6ec7312` |
+| 2 | `74f3bd54e6ec7312` | `e0c60566724a0461` |
+| 3 | `e0c60566724a0461` | `51c4208f03172894` |
+
+Runtime: **159.91s**
+
+All three rounds completed with 4/4 training clients and 4/4 evaluation
+clients participating in every round.
+
+The aggregated client-side training metrics reported `num_examples = 160`
+per round, corresponding to 32 training examples processed for 5 local
+epochs. The reported `batches_processed = 11.25` is consistent with the
+example-weighted aggregation of the heterogeneous client workloads.
+
+Evaluation remained fixed at 32 examples per round. Accuracy remained
+0.5000 across all three rounds, while training loss decreased from 0.680932
+to 0.679574 and evaluation loss decreased from 0.686110 to 0.684794.
+
+These observations describe this experimental configuration and are not
+treated as general conclusions about data imbalance or aggregation behavior.
