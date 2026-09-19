@@ -34,7 +34,7 @@ testloader = DataLoader(
 
 for epochs in [1, 2]:
 
-    print(f"\nTraining with {epochs} epoch(s)")
+    print(f"\nTraining with {epochs} epoch(s)...")
 
     model = FedMedModel()
 
