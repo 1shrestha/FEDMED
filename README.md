@@ -862,10 +862,6 @@ Round 2 therefore completed using the three successful training clients. Evaluat
 E6 successfully demonstrates controlled client-failure tolerance in the Flower runtime. A training client can fail during a federated round without aborting the round: the failed reply is ignored, the remaining successful client updates are aggregated, evaluation continues normally, and subsequent rounds proceed successfully.
 
 
-Planned:
-
-    E9 — Centralized vs Federated Training
-
 ### E7 — Local Epochs
 
 E7 evaluates the effect of local training epochs on the federated learning
@@ -1048,3 +1044,94 @@ to 0.679574 and evaluation loss decreased from 0.686110 to 0.684794.
 
 These observations describe this experimental configuration and are not
 treated as general conclusions about data imbalance or aggregation behavior.
+
+### E9 — Centralized vs Federated Training
+
+E9 compares centralized training with the existing federated workflow under a
+matched training-data exposure. The centralized run uses the full 32-example
+dataset for 15 epochs. The federated baseline uses 4 IID clients with 8
+examples each, 5 local epochs per round, and 3 federated rounds. Both
+configurations therefore process 480 example-passes in total.
+
+**Common configuration**
+
+    Training samples: 32
+    Batch size: 4
+    Learning rate: 0.01
+    Optimizer: SGD
+    Seed: 42
+
+**E9-A — Centralized**
+
+    Training mode: centralized
+    Clients: 1
+    Epochs: 15
+    Training example-passes: 480
+    Evaluation samples: 32
+
+| Metric | Result |
+|---|---:|
+| Epochs | 15 |
+| Samples processed | 480 |
+| Batches processed | 120 |
+| Final train loss | 0.6817503422 |
+| Evaluation samples | 32 |
+| Evaluation batches | 8 |
+| Evaluation loss | 0.6809001043 |
+| Accuracy | 0.5000 |
+| Runtime | 16.54s |
+
+The E9-A centralized experiment was implemented as
+`tests/test_e9_centralized.py` using the existing FedMed `Trainer`,
+`Evaluator`, `FlowerSmokeTestModel`, and deterministic dataset construction.
+
+**E9-B — Federated**
+
+E9-B reuses the previously validated E7-C federated experiment as the
+balanced federated baseline. E7-C used the pre-E8 data configuration with
+four IID clients and 8 training examples per client.
+
+    Training mode: federated
+    Clients: 4
+    Training examples/client: 8
+    Federated rounds: 3
+    Local epochs/round: 5
+    Training example-passes: 480
+    Evaluation samples/round: 32
+
+| Metric | Result |
+|---|---:|
+| Federated rounds | 3 |
+| Local epochs | 5 |
+| Training examples/round | 32 |
+| Final train loss | 0.672117 |
+| Final evaluation loss | 0.684518 |
+| Accuracy | 0.5000 |
+| Runtime | 311.00s |
+
+**E9 comparison**
+
+| Metric | Centralized | Federated |
+|---|---:|---:|
+| Total training examples | 32 | 32/round |
+| Training example-passes | 480 | 480 |
+| Epochs / local epochs | 15 | 5 × 3 rounds |
+| Final train loss | 0.681750 | 0.672117 |
+| Final evaluation loss | 0.680900 | 0.684518 |
+| Accuracy | 0.5000 | 0.5000 |
+| Measured runtime | 16.54s | 311.00s |
+
+Both configurations produced 50% accuracy under this experimental setup.
+The centralized run produced the lower final evaluation loss, while the
+federated run produced the lower final training loss. The measured federated
+runtime includes Flower distributed-runtime and orchestration overhead and
+therefore should not be interpreted as a direct model-training speed
+comparison.
+
+E9-B is explicitly recorded as a reused E7-C result rather than a newly
+rerun experiment. The E9-A test passed independently, and the complete
+regression suite passed with 603 tests.
+
+These observations describe this specific experimental configuration and are
+not treated as general conclusions about centralized or federated learning.
+
