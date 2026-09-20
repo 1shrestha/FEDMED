@@ -1,148 +1,109 @@
 """
-client.py  (WEEK 1-4 DELIVERABLE — this file grows across the project)
-------------------------------------------------------------------------
-Represents ONE hospital node. Run three separate instances of this process
-(different --client-id, same --server-address) to simulate the 3-hospital
-cross-silo setup. In Week 1-2 this is plaintext FedAvg. Flip --encrypt in
-Week 3 to add homomorphic encryption. Flip --dp in Week 4 to add
-differential privacy noise on top.
+FedMed client node. One instance of this runs inside each hospital's
+network perimeter. It:
+  1. Pulls the current global model weights from the server (plaintext --
+     the *model* is not secret, only each hospital's *update* is).
+  2. Trains locally on that hospital's private MRI data (never leaves
+     the node).
+  3. Computes the weight delta, encrypts it with the shared CKKS public
+     context, and sends only ciphertext back to the server.
 
-Run (in 3 separate terminals):
-    python federated/client.py --client-id 0 --server-address localhost:8080
-    python federated/client.py --client-id 1 --server-address localhost:8080
-    python federated/client.py --client-id 2 --server-address localhost:8080
+Run: NODE_ID=hospital-a NODE_DATA_DIR=/data/hospital-a python client.py
 """
-
-import argparse
-import sys
 import os
+import sys
+import logging
+
 import numpy as np
 import torch
 import flwr as fl
-from torch.utils.data import DataLoader
+from flwr.common import Parameters, FitRes, ndarrays_to_parameters, parameters_to_ndarrays
+from monai.losses import DiceLoss
+from monai.metrics import DiceMetric
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.unet3d import build_model, build_loss, build_metric
-from data.synthetic_data import partition_dataset
-from privacy.dp_utils import add_dp_noise
+from client_node.model import build_unet3d
+from client_node.data import get_dataloaders
+from encryption import he_utils
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("fedmed.client")
+
+NODE_ID = os.environ.get("NODE_ID", "hospital-a")
+NODE_DATA_DIR = os.environ.get("NODE_DATA_DIR", f"/data/{NODE_ID}")
+SERVER_ADDRESS = os.environ.get("SERVER_ADDRESS", "central-server:8080")
+PUBLIC_CTX_PATH = os.environ.get("PUBLIC_CTX_PATH", "/keys/public_context.bin")
+LOCAL_EPOCHS = int(os.environ.get("LOCAL_EPOCHS", "1"))
+LR = float(os.environ.get("LEARNING_RATE", "1e-4"))
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def get_parameters(model):
-    return [val.cpu().numpy() for val in model.state_dict().values()]
-
-
-def set_parameters(model, parameters):
-    keys = list(model.state_dict().keys())
-    new_state = {k: torch.tensor(v) for k, v in zip(keys, parameters)}
-    model.load_state_dict(new_state, strict=True)
-
-
-class HospitalClient(fl.client.NumPyClient):
-    def __init__(self, client_id, n_clients=3, volume_size=48, local_epochs=1,
-                 use_dp=False, dp_epsilon=5.0, non_iid=False, device=None):
-        self.client_id = client_id
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = build_model().to(self.device)
-        self.loss_fn = build_loss()
-        self.metric_fn = build_metric()
-        self.local_epochs = local_epochs
-        self.use_dp = use_dp
-        self.dp_epsilon = dp_epsilon
-
-        # each node only ever sees ITS OWN partition — this is the "raw data
-        # never leaves the hospital" guarantee in practice
-        partitions = partition_dataset(n_total=n_clients * 20, n_clients=n_clients,
-                                        volume_size=volume_size, iid=not non_iid)
-        self.train_loader = DataLoader(partitions[client_id], batch_size=2, shuffle=True)
-
-        print(f"[hospital-{client_id}] ready, {len(partitions[client_id])} local samples, device={self.device}")
+class FedMedClient(fl.client.NumPyClient):
+    def __init__(self):
+        self.model = build_unet3d().to(DEVICE)
+        self.train_loader, self.val_loader = get_dataloaders(NODE_DATA_DIR)
+        self.loss_fn = DiceLoss(to_onehot_y=False, sigmoid=True)
+        self.dice_metric = DiceMetric(include_background=True, reduction="mean")
+        with open(PUBLIC_CTX_PATH, "rb") as f:
+            self.public_ctx = he_utils.load_context(f.read())
 
     def get_parameters(self, config):
-        return get_parameters(self.model)
+        return [p.detach().cpu().numpy() for p in self.model.parameters()]
+
+    def set_parameters(self, parameters):
+        for p, arr in zip(self.model.parameters(), parameters):
+            p.data = torch.tensor(arr, dtype=p.dtype, device=DEVICE)
 
     def fit(self, parameters, config):
-        # 1. receive current global weights from the server
-        received_params = [p.copy() for p in parameters]
-        set_parameters(self.model, parameters)
+        before = [arr.copy() for arr in parameters]
+        self.set_parameters(parameters)
 
-        # 2. train LOCALLY on this hospital's private data only
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=LR)
         self.model.train()
-        for epoch in range(self.local_epochs):
-            epoch_loss = 0.0
+        running_loss, n_batches = 0.0, 0
+        for _epoch in range(LOCAL_EPOCHS):
             for batch in self.train_loader:
-                images = batch["image"].to(self.device)
-                labels = batch["label"].to(self.device)
+                images = batch["image"].to(DEVICE)
+                labels = batch["label"].to(DEVICE)
                 optimizer.zero_grad()
                 outputs = self.model(images)
                 loss = self.loss_fn(outputs, labels)
                 loss.backward()
                 optimizer.step()
-                epoch_loss += loss.item()
-            print(f"[hospital-{self.client_id}] local epoch {epoch+1}/{self.local_epochs} loss={epoch_loss/len(self.train_loader):.4f}")
+                running_loss += loss.item()
+                n_batches += 1
 
-        # 3. compute the UPDATE (delta), not the raw weights — this is what
-        #    gets DP-noised and/or encrypted before leaving the hospital
-        new_params = get_parameters(self.model)
-        updates = [new - old for new, old in zip(new_params, received_params)]
+        after = [p.detach().cpu().numpy() for p in self.model.parameters()]
+        delta = [a - b for a, b in zip(after, before)]
 
-        if self.use_dp:
-            flat_shapes = [u.shape for u in updates]
-            flat = np.concatenate([u.flatten() for u in updates])
-            flat = add_dp_noise(flat, epsilon=self.dp_epsilon)
-            idx = 0
-            noised = []
-            for shape in flat_shapes:
-                n = int(np.prod(shape))
-                noised.append(flat[idx:idx+n].reshape(shape))
-                idx += n
-            updates = noised
-            print(f"[hospital-{self.client_id}] applied DP noise (epsilon={self.dp_epsilon})")
+        encrypted_delta = he_utils.encrypt_weights(self.public_ctx, delta)
+        logger.info("node=%s round complete, avg_loss=%.4f, sending %d encrypted bytes",
+                    NODE_ID, running_loss / max(n_batches, 1), len(encrypted_delta))
 
-        # reconstruct weights-to-send = original + (possibly noised) update
-        # (encryption, if enabled, happens at the Flower transport/strategy
-        # layer — see federated/server.py + privacy/he_utils.py for the HE path)
-        params_to_send = [old + u for old, u in zip(received_params, updates)]
-
-        return params_to_send, len(self.train_loader.dataset), {}
+        # Ship the ciphertext as a single opaque ndarray of dtype uint8;
+        # the custom server-side strategy knows to treat this specially.
+        payload_arr = np.frombuffer(encrypted_delta, dtype=np.uint8).copy()
+        metrics = {"node_id": NODE_ID, "loss": running_loss / max(n_batches, 1),
+                   "encrypted": True}
+        return [payload_arr], len(self.train_loader.dataset), metrics
 
     def evaluate(self, parameters, config):
-        set_parameters(self.model, parameters)
+        self.set_parameters(parameters)
         self.model.eval()
-        self.metric_fn.reset()
-        total_loss = 0.0
+        self.dice_metric.reset()
+        val_loss = 0.0
         with torch.no_grad():
-            for batch in self.train_loader:
-                images = batch["image"].to(self.device)
-                labels = batch["label"].to(self.device)
+            for batch in self.val_loader:
+                images = batch["image"].to(DEVICE)
+                labels = batch["label"].to(DEVICE)
                 outputs = self.model(images)
-                loss = self.loss_fn(outputs, labels)
-                total_loss += loss.item()
+                val_loss += self.loss_fn(outputs, labels).item()
                 preds = (torch.sigmoid(outputs) > 0.5).float()
-                self.metric_fn(y_pred=preds, y=labels)
-        dice = self.metric_fn.aggregate().item()
-        return total_loss / len(self.train_loader), len(self.train_loader.dataset), {"dice": dice}
+                self.dice_metric(y_pred=preds, y=labels)
+        dice = self.dice_metric.aggregate().item()
+        n = max(len(self.val_loader), 1)
+        return val_loss / n, len(self.val_loader.dataset), {"dice": dice, "node_id": NODE_ID}
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--client-id", type=int, required=True)
-    parser.add_argument("--n-clients", type=int, default=3)
-    parser.add_argument("--server-address", type=str, default="localhost:8080")
-    parser.add_argument("--volume-size", type=int, default=48)
-    parser.add_argument("--local-epochs", type=int, default=1)
-    parser.add_argument("--dp", action="store_true", help="enable differential privacy noise (Week 4)")
-    parser.add_argument("--dp-epsilon", type=float, default=5.0)
-    parser.add_argument("--non-iid", action="store_true", help="simulate heterogeneous hospital data distributions")
-    args = parser.parse_args()
-
-    client = HospitalClient(
-        client_id=args.client_id,
-        n_clients=args.n_clients,
-        volume_size=args.volume_size,
-        local_epochs=args.local_epochs,
-        use_dp=args.dp,
-        dp_epsilon=args.dp_epsilon,
-        non_iid=args.non_iid,
-    )
-    fl.client.start_numpy_client(server_address=args.server_address, client=client)
+    fl.client.start_numpy_client(server_address=SERVER_ADDRESS, client=FedMedClient())
