@@ -1,14 +1,120 @@
-# Local smoke test of the deployment container before pushing to a cloud VM:
-#   docker compose -f backend/docker-compose.yml up --build
+version: "3.9"
+
+x-common-env: &common-env
+  KEYS_DIR: /keys
+
 services:
-  fedmed-backend:
+  keygen:
     build:
-      context: ..
-      dockerfile: backend/Dockerfile
+      context: .
+      dockerfile: docker/Dockerfile.keygen
+    volumes:
+      - keys:/keys
+    environment: *common-env
+    # Runs once, writes secret+public CKKS contexts, then exits.
+
+  metrics-hub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.metrics
+    ports:
+      - "8090:8090"
+    restart: unless-stopped
+
+  central-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+      metrics-hub:
+        condition: service_started
+    volumes:
+      - keys:/keys:ro
+    environment:
+      <<: *common-env
+      NUM_ROUNDS: "20"
+      MIN_CLIENTS: "3"
+      METRICS_HUB_URL: "http://metrics-hub:8090"
+      SERVER_BIND: "0.0.0.0:8080"
     ports:
       - "8080:8080"
-      - "8765:8765"
+    restart: unless-stopped
+
+  hospital-a:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.client
+    depends_on:
+      central-server:
+        condition: service_started
+    volumes:
+      - keys:/keys:ro
+      - ./data/hospital-a:/data/hospital-a:ro
     environment:
-      - FL_ROUNDS=5
-      - FL_N_CLIENTS=3
-      - FL_MIN_CLIENTS=2
+      NODE_ID: hospital-a
+      NODE_DATA_DIR: /data/hospital-a
+      SERVER_ADDRESS: central-server:8080
+      PUBLIC_CTX_PATH: /keys/public_context.bin
+      LOCAL_EPOCHS: "1"
+      LEARNING_RATE: "1e-4"
+    # To enable GPU training on a node, add under this service:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  hospital-b:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.client
+    depends_on:
+      central-server:
+        condition: service_started
+    volumes:
+      - keys:/keys:ro
+      - ./data/hospital-b:/data/hospital-b:ro
+    environment:
+      NODE_ID: hospital-b
+      NODE_DATA_DIR: /data/hospital-b
+      SERVER_ADDRESS: central-server:8080
+      PUBLIC_CTX_PATH: /keys/public_context.bin
+      LOCAL_EPOCHS: "1"
+      LEARNING_RATE: "1e-4"
+
+  hospital-c:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.client
+    depends_on:
+      central-server:
+        condition: service_started
+    volumes:
+      - keys:/keys:ro
+      - ./data/hospital-c:/data/hospital-c:ro
+    environment:
+      NODE_ID: hospital-c
+      NODE_DATA_DIR: /data/hospital-c
+      SERVER_ADDRESS: central-server:8080
+      PUBLIC_CTX_PATH: /keys/public_context.bin
+      LOCAL_EPOCHS: "1"
+      LEARNING_RATE: "1e-4"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    environment:
+      VITE_METRICS_WS_URL: "ws://localhost:8090/ws/metrics"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - metrics-hub
+    restart: unless-stopped
+
+volumes:
+  keys:
