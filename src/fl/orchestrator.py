@@ -42,6 +42,13 @@ from src.training.metrics import Accuracy
 from src.training.trainer import Trainer
 
 
+# PyTorch inter-op thread configuration is process-wide and can only be
+# changed before parallel work starts. Configure it once when this module
+# is loaded rather than every time an orchestrator is constructed.
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
+
 class FlowerSmokeTestModel(BaseModel):
     """Small deterministic model used by the Flower integration runtime."""
 
@@ -53,9 +60,6 @@ class FedMedOrchestrator:
     """Central composition root for the FedMed Flower application."""
 
     def __init__(self) -> None:
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
-
         config = load_config()
         self._training_config = config.training
         self._data_config = config.data
