@@ -26,7 +26,7 @@ from typing import Any
 import torch
 from torch import nn
 from torch.optim import SGD
-from torch.utils.data import DataLoader, TensorDataset
+from src.data.loader import create_dataloader
 
 from app.client import create_client_app
 from app.server import create_server_app
@@ -142,7 +142,7 @@ class FedMedOrchestrator:
             f"samples={len(partition)}"
         )
 
-        return DataLoader(
+        return create_dataloader(
             partition,
             batch_size=self._training_config.batch_size,
             shuffle=False,
