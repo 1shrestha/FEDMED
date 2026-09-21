@@ -3,7 +3,7 @@ security/tests/test_defenses.py
 ================================
 Unit tests for security.defenses — Byzantine-robust aggregation.
 
-Tests cover all four algorithms:
+Tests cover all the four algorithms:
 1. trimmed_mean
    - Basic correctness: result within honest range.
    - Poisoning scenario: outlier excluded from mean.
