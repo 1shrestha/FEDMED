@@ -201,7 +201,10 @@ class FedMedOrchestrator:
             partition_index = node_id % self._data_config.num_clients
 
         train_loader = self._create_partitioned_loader(partition_index)
-        eval_loader = self._create_partitioned_loader(partition_index)
+        eval_loader = self._create_partitioned_loader(
+            partition_index,
+            split="eval",
+        )
 
         client = FederatedClient(
             client_id=client_id,

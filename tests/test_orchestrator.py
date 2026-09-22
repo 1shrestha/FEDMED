@@ -33,3 +33,31 @@ def test_orchestrator_uses_single_torch_thread() -> None:
 
     assert orchestrator is not None
     assert torch.get_num_threads() == 1
+
+
+def test_partitioned_loader_uses_distinct_train_and_eval_splits() -> None:
+    orchestrator = FedMedOrchestrator()
+
+    train_loader = orchestrator._create_partitioned_loader(
+        0,
+        split="train",
+    )
+    eval_loader = orchestrator._create_partitioned_loader(
+        0,
+        split="eval",
+    )
+
+    assert len(train_loader.dataset) == 4
+    assert len(eval_loader.dataset) == 8
+
+
+def test_build_client_uses_eval_split_for_evaluation_loader() -> None:
+    orchestrator = FedMedOrchestrator()
+
+    client = orchestrator.build_client(
+        "client_0",
+        partition_index=0,
+    )
+
+    assert len(client._train_loader.dataset) == 4
+    assert len(client._eval_loader.dataset) == 8
