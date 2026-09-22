@@ -49,5 +49,5 @@ for epochs in [1, 2]:
         testloader
     )
 
-    print(f"Test Loss: {test_loss:.4f}")
-    print(f"Test Accuracy: {accuracy:.2f}%")
+    print(f"Test-Loss: {test_loss:.4f}")
+    print(f"Test-Accuracy: {accuracy:.2f}%")
