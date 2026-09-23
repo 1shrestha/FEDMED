@@ -1,4 +1,4 @@
-# Week 2 — Distributed Coordination Layer
+# Week 5 & 6 — Distributed Coordination Layer
 
 Control-plane service that decides *who* participates in a training round
 and tells them to start. It is explicitly the **signal layer**, not the
