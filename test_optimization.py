@@ -37,7 +37,7 @@ loss = train_one_epoch(
 )
 
 print("DAY 9 MODEL OPTIMIZATION")
-print("------------------------")
+print("-------------------------")
 print(f"Learning rate: {0.001}")
 print(f"Training loss: {loss:.4f}")
 print("Optimized local training completed successfully.")
