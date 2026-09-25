@@ -36,7 +36,7 @@ testloader = DataLoader(
 
 model = FedMedModel()
 
-print("Training started....")
+print("Training started...")
 
 train(
     model,
