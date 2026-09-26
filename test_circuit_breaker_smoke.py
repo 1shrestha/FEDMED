@@ -2,7 +2,7 @@
 test_circuit_breaker_smoke.py
 
 No-infra test for circuit_breaker.py's CLOSED -> OPEN -> HALF_OPEN ->
-CLOSED lifecycle. Run: python test_circuit_breaker_smoke.py
+CLOSED lifecycle. Run: the python test_circuit_breaker_smoke.py
 """
 
 import time
