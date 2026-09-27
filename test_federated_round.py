@@ -30,7 +30,7 @@ global_model = FedMedModel()
 
 global_parameters = get_model_parameters(global_model)
 
-print("Global model created.")
+print("Global model created")
 
 
 # Hospital 1
