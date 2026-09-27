@@ -1179,6 +1179,8 @@ Round coordination
 
 Server behavior
 
+Federation checkpoint persistence
+
 Flower client integration
 
 Flower server integration
@@ -1480,6 +1482,7 @@ FedMed/
 │   │
 │   ├── fl/
 │   │   ├── aggregation.py
+│   │   ├── checkpoint.py
 │   │   ├── client.py
 │   │   ├── orchestrator.py
 │   │   ├── parameters.py
@@ -1534,6 +1537,7 @@ Label-Skew Partitioning              COMPLETED
 Client Failure Experiment            COMPLETED
 Federated Experiments E1-E9          COMPLETED
 Centralized Comparison               COMPLETED
+Federation Checkpointing             COMPLETED
 Orchestrator Upgrade                 IN PROGRESS
 Automated Regression Suite            ACTIVE
 
@@ -1567,6 +1571,104 @@ Full regression
 Commit
 
 The goal is to improve the existing implementation without unnecessarily changing the established FedMed architecture.
+
+
+---
+
+39. Federation Checkpointing
+
+`FederatedServer` owns the only long-lived cross-round state in FedMed:
+
+- the current global `ParameterPayload`
+- the most recently completed round number
+- the immutable round history
+
+Until now that state existed only in memory, so a crash mid-federation lost all progress and there was no way to resume.
+
+The `checkpoint` block in `configs/config.yaml` was already declared and validated but had no consumer. It now has one.
+
+New module
+
+`src/fl/checkpoint.py` is framework-independent and Flower-free. It contains three public names:
+
+- `CheckpointError` — a specific subclass of the existing `FederatedLearningError` hierarchy
+- `FederationCheckpoint` — an immutable, self-describing snapshot of resumable state
+- `FederationCheckpointStore` — atomic filesystem persistence
+
+Self-describing checkpoints
+
+A checkpoint stores the parameter values **and** the structural contract they were captured against (names, shapes, dtypes). That makes a mismatch between the saved federation and the current one detectable instead of silently producing a corrupt resume. Restore reuses the existing Phase 3.1 `validate_parameters()` and `validate_contract_compatibility()` boundaries rather than introducing a second validation mechanism.
+
+Storage is a single uncompressed `.npz` archive holding the round number, the contract metadata, and one array per parameter. Because different parameters can have different ranks, shapes are stored in one flattened `int64` vector delimited by a per-parameter start offset.
+
+Crash safety
+
+`save()` serializes into a temporary file in the destination directory and then moves it into place with `os.replace`. An interrupted write therefore cannot truncate an existing checkpoint: the previous file stays intact and the temporary file is an ignorable artifact.
+
+Persistence also never runs ahead of progress. The server saves only *after* a round is fully committed, so a failed round is never recorded as progress, and a failed save surfaces to the caller without rolling back a completed round.
+
+Corruption is rejected loudly
+
+A missing, truncated, or inconsistent checkpoint raises `CheckpointError` rather than falling back to the initial model. Silently restarting from scratch is the worst failure mode a resume feature can have, because it discards progress without telling anyone. The one exception is `load_latest()` on an empty store, which returns `None` because "nothing saved yet" is a normal state.
+
+Usage
+
+Attaching a store is optional and keyword-only. Omitting it preserves earlier behavior exactly: no filesystem access, no state written.
+
+```python
+store = FederationCheckpointStore.from_config(
+    config.checkpoint
+)
+
+server = FederatedServer(
+    clients=clients,
+    strategy=strategy,
+    coordinator=coordinator,
+    initial_parameters=initial_parameters,
+    checkpoint_store=store,
+)
+
+# Saved automatically after each committed round that
+# falls on the store's save_every_round interval.
+server.run(num_rounds=3)
+
+# Or persist explicitly at any point.
+server.save_checkpoint()
+
+# After a restart, a fresh server resumes exactly where
+# the previous one stopped.
+resumed = FederatedServer(
+    clients=clients,
+    strategy=strategy,
+    coordinator=coordinator,
+    initial_parameters=initial_parameters,
+    checkpoint_store=store,
+)
+
+resumed.restore_checkpoint()
+
+# Continues at the next contiguous round number.
+resumed.run_round()
+```
+
+`FederationCheckpointStore.from_config()` is what gives the existing `CheckpointConfig` section its first real consumer.
+
+A restored server resumes with an empty round history. Durable state is the global model plus round progression; `RoundExecution` carries live client result objects and per-round metrics that are not part of the durable state.
+
+Architecture fit
+
+- Pure NumPy and filesystem work under `src/`; no Flower import.
+- Reuses `ParameterPayload`, `copy_parameters`, `validate_parameters`, `ParameterContract`, `FederatedClient.parameter_contract`, and `CheckpointConfig`.
+- Strategy and Aggregator are untouched.
+- The four existing positional `FederatedServer` constructor arguments are unchanged, so all current callers and tests behave identically.
+
+Current scope limit
+
+The Flower runtime path in `app/server.py` adapts `FedAvgStrategy` directly to Flower and does not route through `FederatedServer`. Checkpointing is therefore available at the `FederatedServer` level only, and `checkpoint.enabled` does **not** yet affect a live Flower run. Wiring the Flower runtime through `FederatedServer` is a separate, larger upgrade and was deliberately not attempted here.
+
+Checkpoint test coverage
+
+88 tests covering construction and defensive copying, contract mismatch rejection, non-finite and malformed payload rejection, round-trip fidelity across mixed-rank shapes, round discovery, unrelated-file tolerance, corruption and incomplete-archive rejection, atomic-save failure preserving a good checkpoint, automatic save intervals, manual save/restore round-trips, resumed round contiguity, mismatched-federation rejection leaving state untouched, and failure not advancing the checkpoint.
 
 
 ---

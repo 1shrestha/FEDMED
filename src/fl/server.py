@@ -62,6 +62,18 @@ FederatedServer intentionally does NOT:
 Those responsibilities remain behind the existing FedMed
 contracts and future runtime/operational layers.
 
+Checkpoint persistence
+----------------------
+The server does not implement checkpoint serialization itself. When
+an optional ``FederationCheckpointStore`` is attached, the server
+delegates persistence of its own long-lived state to that store
+after each committed round, and can restore itself from a
+persisted checkpoint.
+
+Omitting the store leaves behavior unchanged: no filesystem access
+and no state is written. The actual serialization format lives in
+``src/fl/checkpoint.py``.
+
 Design invariants
 -----------------
 
@@ -91,10 +103,16 @@ from collections.abc import Mapping
 from types import MappingProxyType
 
 from src.common.exceptions import FederatedLearningError
+from src.fl.checkpoint import (
+    FederationCheckpoint,
+    FederationCheckpointStore,
+)
 from src.fl.client import FederatedClient
 from src.fl.parameters import (
+    ParameterContract,
     ParameterPayload,
     copy_parameters,
+    validate_contract_compatibility,
     validate_parameters,
 )
 from src.fl.rounds import RoundCoordinator, RoundExecution
@@ -124,6 +142,15 @@ class FederatedServer:
         Initial global model state represented by FedMed's
         framework-independent ``ParameterPayload``.
 
+    checkpoint_store:
+        Optional ``FederationCheckpointStore`` used to persist and
+        restore the server's long-lived state.
+
+        When provided, the server saves a checkpoint after each
+        committed round that falls on the store's configured
+        interval. When omitted, the server performs no persistence
+        and its behavior is identical to earlier versions.
+
     Notes
     -----
     ``clients`` and ``coordinator.clients`` must describe the same
@@ -137,6 +164,8 @@ class FederatedServer:
         strategy: FederatedStrategy,
         coordinator: RoundCoordinator,
         initial_parameters: ParameterPayload,
+        *,
+        checkpoint_store: FederationCheckpointStore | None = None,
     ) -> None:
         # --------------------------------------------------------
         # Validate dependencies
@@ -162,6 +191,16 @@ class FederatedServer:
             raise FederatedLearningError(
                 "FederatedServer.coordinator must be a "
                 "RoundCoordinator."
+            )
+
+        if checkpoint_store is not None and not isinstance(
+            checkpoint_store,
+            FederationCheckpointStore,
+        ):
+            raise FederatedLearningError(
+                "FederatedServer.checkpoint_store must be a "
+                "FederationCheckpointStore or None, got "
+                f"{type(checkpoint_store).__name__}."
             )
 
         normalized_clients = dict(
@@ -215,6 +254,21 @@ class FederatedServer:
             RoundExecution,
             ...
         ] = ()
+
+        # Optional durability boundary.
+        #
+        # ``None`` means this server never touches the filesystem.
+        self._checkpoint_store = checkpoint_store
+
+        # Canonical parameter layout shared by the federation.
+        #
+        # Derived once so a checkpoint can describe itself without
+        # re-deriving the layout on every save.
+        self._parameter_contract = (
+            self._derive_parameter_contract(
+                normalized_clients,
+            )
+        )
 
     # ============================================================
     # Public properties
@@ -286,6 +340,173 @@ class FederatedServer:
         """
 
         return self._round_history
+
+    @property
+    def checkpoint_store(
+        self,
+    ) -> FederationCheckpointStore | None:
+        """
+        Return the attached checkpoint store, if any.
+
+        ``None`` means the server performs no persistence.
+        """
+
+        return self._checkpoint_store
+
+    @property
+    def parameter_contract(self) -> ParameterContract:
+        """
+        Return the federation's canonical parameter layout.
+
+        Every registered client is verified to share this layout,
+        which is what allows a checkpoint to describe itself.
+        """
+
+        return self._parameter_contract
+
+    # ============================================================
+    # Checkpointing
+    # ============================================================
+
+    def save_checkpoint(self) -> FederationCheckpoint | None:
+        """
+        Persist the current global state through the attached store.
+
+        Returns:
+            The written FederationCheckpoint, or None when no
+            store is attached.
+
+        Raises:
+            FederatedLearningError:
+                If no store is attached, or the checkpoint could
+                not be written.
+        """
+
+        store = self._require_checkpoint_store(
+            "save_checkpoint"
+        )
+
+        return self._write_checkpoint(store)
+
+    def restore_checkpoint(
+        self,
+        completed_round: int | None = None,
+    ) -> FederationCheckpoint:
+        """
+        Restore global state from a persisted checkpoint.
+
+        The checkpoint's recorded contract is validated against the
+        federation's canonical contract, and its payload is
+        validated against every registered client, before any
+        server state is changed. A rejected checkpoint therefore
+        leaves the server untouched.
+
+        Round history is intentionally not restored. ``RoundExecution``
+        carries live client result objects and per-round metrics
+        that are not part of the durable state; the restored server
+        reports an empty history while resuming at
+        ``completed_round``.
+
+        Parameters:
+            completed_round:
+                Round to restore. When omitted, the store's most
+                recent checkpoint is used.
+
+        Returns:
+            The restored FederationCheckpoint.
+
+        Raises:
+            FederatedLearningError:
+                If no store is attached, no checkpoint exists, or
+                the checkpoint does not belong to this federation.
+        """
+
+        store = self._require_checkpoint_store(
+            "restore_checkpoint"
+        )
+
+        if completed_round is None:
+            checkpoint = store.load_latest()
+
+            if checkpoint is None:
+                raise FederatedLearningError(
+                    "No checkpoint is available to restore from "
+                    f"{store.directory}."
+                )
+
+        else:
+            checkpoint = store.load(completed_round)
+
+        # --------------------------------------------------------
+        # Validate everything BEFORE mutating server state.
+        # --------------------------------------------------------
+
+        try:
+            checkpoint.validate_against(
+                self._parameter_contract,
+            )
+
+        except FederatedLearningError as exc:
+            raise FederatedLearningError(
+                "Refusing to restore a checkpoint that does not "
+                f"match this federation: {exc}"
+            ) from exc
+
+        restored_parameters = (
+            self._validate_and_copy_parameters(
+                checkpoint.parameters,
+                self._clients,
+            )
+        )
+
+        # --------------------------------------------------------
+        # Atomic commit of restored state
+        # --------------------------------------------------------
+
+        self._global_parameters = restored_parameters
+
+        self._completed_round = (
+            checkpoint.completed_round
+        )
+
+        # Durable state is the global model and round progression.
+        self._round_history = ()
+
+        return checkpoint
+
+    def _require_checkpoint_store(
+        self,
+        operation: str,
+    ) -> FederationCheckpointStore:
+        """
+        Return the attached store or fail clearly.
+        """
+
+        if self._checkpoint_store is None:
+            raise FederatedLearningError(
+                f"{operation}() requires a checkpoint store, but "
+                "FederatedServer was constructed without one."
+            )
+
+        return self._checkpoint_store
+
+    def _write_checkpoint(
+        self,
+        store: FederationCheckpointStore,
+    ) -> FederationCheckpoint:
+        """
+        Build and persist a checkpoint of current global state.
+        """
+
+        checkpoint = FederationCheckpoint(
+            completed_round=self._completed_round,
+            contract=self._parameter_contract,
+            parameters=self._global_parameters,
+        )
+
+        store.save(checkpoint)
+
+        return checkpoint
 
     # ============================================================
     # Single-round execution
@@ -412,6 +633,23 @@ class FederatedServer:
             *self._round_history,
             execution,
         )
+
+        # --------------------------------------------------------
+        # Optional durability
+        # --------------------------------------------------------
+        #
+        # This runs only after the round is fully committed, so a
+        # failed save can never roll back or corrupt a completed
+        # round. The round stays committed and the error surfaces
+        # to the caller.
+
+        if self._checkpoint_store is not None:
+            if self._checkpoint_store.should_save(
+                self._completed_round
+            ):
+                self._write_checkpoint(
+                    self._checkpoint_store,
+                )
 
         return execution
 
@@ -592,6 +830,57 @@ class FederatedServer:
                 "strategy instance configured in the "
                 "RoundCoordinator."
             )
+
+    # ============================================================
+    # Checkpoint support
+    # ============================================================
+
+    @staticmethod
+    def _derive_parameter_contract(
+        clients: Mapping[str, FederatedClient],
+    ) -> ParameterContract:
+        """
+        Derive the federation's canonical parameter layout.
+
+        Every registered client must describe an identical layout.
+        A federation whose clients disagree cannot produce a
+        self-describing checkpoint, so divergence is rejected up
+        front rather than at save time.
+
+        Phase 3.1 remains the canonical contract-comparison
+        boundary.
+        """
+
+        contracts = [
+            client.parameter_contract
+            for client in clients.values()
+        ]
+
+        if not contracts:
+            raise FederatedLearningError(
+                "Cannot derive a parameter contract without clients."
+            )
+
+        canonical = contracts[0]
+
+        for client_id, contract in zip(
+            clients, contracts[1:]
+        ):
+            try:
+                validate_contract_compatibility(
+                    canonical,
+                    contract,
+                )
+
+            except FederatedLearningError as exc:
+                raise FederatedLearningError(
+                    "Client '"
+                    f"{client_id}' declares a parameter contract "
+                    f"incompatible with the rest of the federation: "
+                    f"{exc}"
+                ) from exc
+
+        return canonical
 
     # ============================================================
     # Initial parameter validation
