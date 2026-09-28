@@ -1419,6 +1419,11 @@ separate from:
 
 Flower runtime configuration
 
+The federation policy defined in [configs/config.yaml](configs/config.yaml)
+is wired into the runtime by the composition root. Precedence and the
+distinction between the two sources is described in the
+"Federated Configuration Runtime Wiring" section below.
+
 
 ---
 
@@ -1669,6 +1674,93 @@ The Flower runtime path in `app/server.py` adapts `FedAvgStrategy` directly to F
 Checkpoint test coverage
 
 88 tests covering construction and defensive copying, contract mismatch rejection, non-finite and malformed payload rejection, round-trip fidelity across mixed-rank shapes, round discovery, unrelated-file tolerance, corruption and incomplete-archive rejection, atomic-save failure preserving a good checkpoint, automatic save intervals, manual save/restore round-trips, resumed round contiguity, mismatched-federation rejection leaving state untouched, and failure not advancing the checkpoint.
+
+
+---
+
+40. Federated Configuration Runtime Wiring
+
+Where federated configuration is defined
+
+The framework-independent federated policy is defined in:
+
+configs/config.yaml
+
+under the `federated:` block:
+
+- `num_rounds`
+- `min_clients`
+- `min_available_clients`
+- `fraction_fit`
+- `fraction_evaluate`
+- `strategy`
+
+It is parsed into `FedMedConfig.federated` (`FederatedConfig`) by
+`src/common/config.py` and loaded by the composition root
+`FedMedOrchestrator`.
+
+What it controls
+
+`FedMedOrchestrator.build_server_app()` forwards the federated policy into
+the Flower ServerApp runtime:
+
+    federated.num_rounds             -> ServerApp num_rounds
+    federated.fraction_fit           -> Flower fraction-train baseline
+    federated.fraction_evaluate      -> Flower fraction-evaluate baseline
+    federated.min_available_clients  -> Flower min-available-nodes baseline
+
+Before this wiring, `build_server_app()` hardcoded `num_rounds=1` and the
+Flower adapter consumed only its own `run_config` values. Changing
+`configs/config.yaml` therefore did not change runtime behavior. It now
+does: the centralized configuration drives the runtime, and changing it
+changes the number of rounds and the client-selection policy used by the
+server.
+
+The framework-independent `FederatedServer` continues to take an explicit
+round count per invocation (`FederatedServer.run(num_rounds=...)`). Callers
+that want config-driven behavior pass `config.federated.num_rounds`
+explicitly; `FederatedServer` itself remains configuration-free.
+
+Configuration precedence
+
+Two sources configure the federated runtime, and precedence is explicit:
+
+1. Flower `run_config` (`[tool.flwr.app.config]` in `pyproject.toml`) is
+   the highest-precedence runtime override. For its keys
+   (`num-server-rounds`, `fraction-train`, `fraction-evaluate`,
+   `min-available-nodes`) it always wins.
+
+2. The centralized `FederatedConfig` (`configs/config.yaml`) supplies the
+   runtime baseline for `num_rounds`, `fraction_fit`, `fraction_evaluate`
+   and `min_available_clients`.
+
+3. The `app/server.py` adapter defaults (`num_rounds=1`, fractions `1.0`,
+   `min_available_nodes=1`) apply only when neither source provides a value.
+
+Each `run_config` key overrides only its matching baseline value; keys that
+are absent fall back to the centralized configuration.
+
+Framework-independent vs Flower-specific configuration
+
+- `configs/config.yaml` is framework-independent. It drives the FedMed core
+  and, through the orchestrator, provides the runtime baseline.
+- `pyproject.toml` `[tool.flwr.app.config]` is Flower-specific runtime
+  configuration. It is an independent override and is not generated from
+  the centralized configuration.
+- FedMed does not claim Flower automatically consumes
+  `configs/config.yaml`. The value reaches the runtime because the
+  orchestration root passes the `FederatedConfig` fields into
+  `create_server_app()`, after which Flower's `run_config` remains an
+  authoritative override. This is what keeps the E1-E9 experiments
+  reproducible: their explicit `run_config` values keep taking effect.
+
+Current scope limit
+
+`federated.min_clients` has no consumer in the Flower adapter yet. It is a
+reserved federation-policy field (a minimum *selected* client floor) that
+the current `FedMedFlowerStrategy` does not represent. Only
+`min_available_clients` is used, as the availability gate and selection
+floor on the number of Flower nodes.
 
 
 ---

@@ -1331,6 +1331,185 @@ def test_create_server_app_rejects_invalid_flower_runtime_strategy_config(
 
 
 # ======================================================================
+# Framework-independent federation policy baseline
+# ======================================================================
+
+
+def _capture_runtime_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    """
+    Replace the Flower strategy adapter with a capturing spy.
+
+    The spy records the policy values create_server_app resolves for
+    the framework-independent config baseline and the Flower
+    run_config override.
+    """
+
+    captured: dict[str, object] = {}
+
+    class CapturingStrategy(FedMedFlowerStrategy):
+        def __init__(
+            self,
+            fedmed_strategy: FedAvgStrategy,
+            *,
+            fraction_train: float = 1.0,
+            fraction_evaluate: float = 1.0,
+            min_available_nodes: int = 1,
+        ) -> None:
+            captured["fraction_train"] = fraction_train
+            captured["fraction_evaluate"] = fraction_evaluate
+            captured["min_available_nodes"] = min_available_nodes
+            super().__init__(
+                fedmed_strategy,
+                fraction_train=fraction_train,
+                fraction_evaluate=fraction_evaluate,
+                min_available_nodes=min_available_nodes,
+            )
+
+        def start(self, *args: object, **kwargs: object) -> None:
+            captured["num_rounds"] = kwargs.get("num_rounds")
+            return None
+
+    monkeypatch.setattr(
+        "app.server.FedMedFlowerStrategy",
+        CapturingStrategy,
+    )
+
+    return captured
+
+
+class EmptyRunConfigContext:
+    """Fake Flower context that contributes no runtime override."""
+
+    run_config: dict[str, object] = {}
+
+
+class NoOpGrid:
+    """No-arg FakeGrid for main() invocations that never reach nodes."""
+
+    pass
+
+
+def test_create_server_app_uses_config_baseline_without_run_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The framework-independent policy arguments feed the runtime."""
+
+    captured = _capture_runtime_policy(monkeypatch)
+
+    app = create_server_app(
+        lambda context: make_parameters(),
+        num_rounds=3,
+        fraction_train=0.5,
+        fraction_evaluate=0.75,
+        min_available_nodes=2,
+    )
+
+    app._main(NoOpGrid(), EmptyRunConfigContext())
+
+    assert captured == {
+        "fraction_train": 0.5,
+        "fraction_evaluate": 0.75,
+        "min_available_nodes": 2,
+        "num_rounds": 3,
+    }
+
+
+def test_create_server_app_run_config_overrides_config_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit Flower run_config wins over the config baseline."""
+
+    captured = _capture_runtime_policy(monkeypatch)
+
+    app = create_server_app(
+        lambda context: make_parameters(),
+        num_rounds=3,
+        fraction_train=0.5,
+        fraction_evaluate=0.75,
+        min_available_nodes=2,
+    )
+
+    class OverrideContext:
+        run_config = {
+            "num-server-rounds": 5,
+            "fraction-train": 0.25,
+            "fraction-evaluate": 0.5,
+            "min-available-nodes": 4,
+        }
+
+    app._main(NoOpGrid(), OverrideContext())
+
+    assert captured == {
+        "fraction_train": 0.25,
+        "fraction_evaluate": 0.5,
+        "min_available_nodes": 4,
+        "num_rounds": 5,
+    }
+
+
+def test_create_server_app_run_config_partially_overrides_config_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each run_config key overrides only its matching baseline value."""
+
+    captured = _capture_runtime_policy(monkeypatch)
+
+    app = create_server_app(
+        lambda context: make_parameters(),
+        num_rounds=3,
+        fraction_train=0.5,
+        fraction_evaluate=0.75,
+        min_available_nodes=2,
+    )
+
+    class PartialOverrideContext:
+        run_config = {
+            "num-server-rounds": 4,
+        }
+
+    app._main(NoOpGrid(), PartialOverrideContext())
+
+    assert captured == {
+        "fraction_train": 0.5,
+        "fraction_evaluate": 0.75,
+        "min_available_nodes": 2,
+        "num_rounds": 4,
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_message"),
+    [
+        ({"fraction_train": 0.0}, "fraction_train must be"),
+        ({"fraction_train": 1.1}, "fraction_train must be"),
+        ({"fraction_train": "half"}, "fraction_train must be"),
+        ({"fraction_evaluate": 0.0}, "fraction_evaluate must be"),
+        ({"fraction_evaluate": 1.1}, "fraction_evaluate must be"),
+        ({"fraction_evaluate": True}, "fraction_evaluate must be"),
+        ({"min_available_nodes": 0}, "min_available_nodes must be"),
+        ({"min_available_nodes": 1.5}, "min_available_nodes must be"),
+        ({"num_rounds": 0}, "num_rounds must be"),
+        ({"num_rounds": True}, "num_rounds must be"),
+    ],
+)
+def test_create_server_app_rejects_invalid_config_baseline(
+    kwargs: dict[str, object],
+    expected_message: str,
+) -> None:
+    """Invalid framework-independent runtime policy must be rejected."""
+
+    with pytest.raises(FederatedLearningError) as exc_info:
+        create_server_app(
+            lambda context: make_parameters(),
+            **kwargs,
+        )
+
+    assert expected_message in str(exc_info.value)
+
+
+# ======================================================================
 # Core architecture isolation
 # ======================================================================
 

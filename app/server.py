@@ -1127,6 +1127,48 @@ class FedMedFlowerStrategy(Strategy):
 
 
 # ======================================================================
+# Runtime policy validation
+# ======================================================================
+
+
+def _validate_fraction_source(value: object, label: str) -> float:
+    """
+    Validate a node-selection fraction and return it as float.
+
+    A positive fraction in the open-closed interval ``(0, 1]`` is
+    required so that a server never attempts a round with zero
+    participating nodes.
+    """
+
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise FederatedLearningError(
+            f"{label} must be a number in the range (0, 1]."
+        )
+
+    numeric = float(value)
+
+    if not 0.0 < numeric <= 1.0:
+        raise FederatedLearningError(
+            f"{label} must be a number in the range (0, 1]."
+        )
+
+    return numeric
+
+
+def _validate_count_source(value: object, label: str) -> int:
+    """
+    Validate a positive integer policy count (rounds or nodes).
+    """
+
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise FederatedLearningError(
+            f"{label} must be a positive integer."
+        )
+
+    return value
+
+
+# ======================================================================
 # ServerApp factory
 # ======================================================================
 
@@ -1136,6 +1178,9 @@ def create_server_app(
     strategy_factory: StrategyFactory | None = None,
     *,
     num_rounds: int = 1,
+    fraction_train: float = 1.0,
+    fraction_evaluate: float = 1.0,
+    min_available_nodes: int = 1,
 ) -> ServerApp:
     """
     Create a Flower ServerApp around the FedMed runtime boundary.
@@ -1147,6 +1192,26 @@ def create_server_app(
 
     ``strategy_factory`` optionally creates the framework-independent
     FedMed Strategy.
+
+    Runtime policy arguments
+    ------------------------
+    ``num_rounds``, ``fraction_train``, ``fraction_evaluate`` and
+    ``min_available_nodes`` are the framework-independent federation
+    policy baseline, supplied by the central ``FederatedConfig``.
+
+    Precedence
+    ----------
+    Flower's runtime ``run_config`` (``[tool.flwr.app.config]``) is an
+    explicit runtime override. When ``run_config`` defines a matching
+    key (``num-server-rounds``, ``fraction-train``,
+    ``fraction-evaluate``, ``min-available-nodes``) that value wins.
+    Otherwise the framework-independent policy arguments above are
+    used, and when those are also omitted the adapter defaults apply:
+
+        num_rounds          = 1
+        fraction_train      = 1.0
+        fraction_evaluate   = 1.0
+        min_available_nodes = 1
 
     Flower owns execution of ``strategy.start()``.
     """
@@ -1166,14 +1231,25 @@ def create_server_app(
             "strategy_factory must be callable when supplied."
         )
 
-    if (
-        not isinstance(num_rounds, int)
-        or isinstance(num_rounds, bool)
-        or num_rounds < 1
-    ):
-        raise FederatedLearningError(
-            "num_rounds must be a positive integer."
-        )
+    _validate_fraction_source(
+        fraction_train,
+        "fraction_train",
+    )
+
+    _validate_fraction_source(
+        fraction_evaluate,
+        "fraction_evaluate",
+    )
+
+    _validate_count_source(
+        min_available_nodes,
+        "min_available_nodes",
+    )
+
+    _validate_count_source(
+        num_rounds,
+        "num_rounds",
+    )
 
     app = ServerApp()
 
@@ -1259,60 +1335,34 @@ def create_server_app(
             flush=True,
         )
 
-        if (
-            not isinstance(configured_num_rounds, int)
-            or isinstance(configured_num_rounds, bool)
-            or configured_num_rounds < 1
-        ):
-            raise FederatedLearningError(
-                "run_config['num-server-rounds'] must be "
-                "a positive integer."
-            )
-
-        effective_num_rounds = configured_num_rounds
-
-        configured_fraction_train = run_config.get(
-            "fraction-train",
-            1.0,
-        )
-        configured_fraction_evaluate = run_config.get(
-            "fraction-evaluate",
-            1.0,
-        )
-        configured_min_available_nodes = run_config.get(
-            "min-available-nodes",
-            1,
+        effective_num_rounds = _validate_count_source(
+            configured_num_rounds,
+            "run_config['num-server-rounds']",
         )
 
-        if (
-            not isinstance(configured_fraction_train, (int, float))
-            or isinstance(configured_fraction_train, bool)
-            or not 0.0 < float(configured_fraction_train) <= 1.0
-        ):
-            raise FederatedLearningError(
-                "run_config['fraction-train'] must be "
-                "a number in the range (0, 1]."
-            )
+        configured_fraction_train = _validate_fraction_source(
+            run_config.get(
+                "fraction-train",
+                fraction_train,
+            ),
+            "run_config['fraction-train']",
+        )
 
-        if (
-            not isinstance(configured_fraction_evaluate, (int, float))
-            or isinstance(configured_fraction_evaluate, bool)
-            or not 0.0 < float(configured_fraction_evaluate) <= 1.0
-        ):
-            raise FederatedLearningError(
-                "run_config['fraction-evaluate'] must be "
-                "a number in the range (0, 1]."
-            )
+        configured_fraction_evaluate = _validate_fraction_source(
+            run_config.get(
+                "fraction-evaluate",
+                fraction_evaluate,
+            ),
+            "run_config['fraction-evaluate']",
+        )
 
-        if (
-            not isinstance(configured_min_available_nodes, int)
-            or isinstance(configured_min_available_nodes, bool)
-            or configured_min_available_nodes < 1
-        ):
-            raise FederatedLearningError(
-                "run_config['min-available-nodes'] must be "
-                "a positive integer."
-            )
+        configured_min_available_nodes = _validate_count_source(
+            run_config.get(
+                "min-available-nodes",
+                min_available_nodes,
+            ),
+            "run_config['min-available-nodes']",
+        )
 
         # --------------------------------------------------------------
         # Flower Strategy adapter

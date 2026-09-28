@@ -63,6 +63,7 @@ class FedMedOrchestrator:
         self._training_config = config.training
         self._model_config = config.model
         self._data_config = config.data
+        self._federated_config = config.federated
 
     # ------------------------------------------------------------------
     # DATA
@@ -272,7 +273,10 @@ class FedMedOrchestrator:
         return create_server_app(
             initial_parameters_factory,
             strategy_factory=strategy_factory,
-            num_rounds=1,
+            num_rounds=self._federated_config.num_rounds,
+            fraction_train=self._federated_config.fraction_fit,
+            fraction_evaluate=self._federated_config.fraction_evaluate,
+            min_available_nodes=self._federated_config.min_available_clients,
         )
 
     # ------------------------------------------------------------------

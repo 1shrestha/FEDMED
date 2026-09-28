@@ -1,5 +1,7 @@
+import pytest
 import torch
 
+from src.common.exceptions import FederatedLearningError
 from src.fl.orchestrator import FedMedOrchestrator
 
 
@@ -136,3 +138,176 @@ def test_build_client_uses_configured_seed() -> None:
             torch.from_numpy(actual),
             torch.from_numpy(expected),
         )
+
+
+# ======================================================================
+# Federated configuration wiring
+# ======================================================================
+
+
+def _capture_create_server_app_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    """Replace create_server_app with a spy that records its policy args."""
+
+    captured: dict[str, object] = {}
+
+    def fake_create_server_app(
+        initial_parameters_factory,
+        strategy_factory=None,
+        *,
+        num_rounds=1,
+        fraction_train=1.0,
+        fraction_evaluate=1.0,
+        min_available_nodes=1,
+    ):
+        captured["num_rounds"] = num_rounds
+        captured["fraction_train"] = fraction_train
+        captured["fraction_evaluate"] = fraction_evaluate
+        captured["min_available_nodes"] = min_available_nodes
+        return object()
+
+    monkeypatch.setattr(
+        "src.fl.orchestrator.create_server_app",
+        fake_create_server_app,
+    )
+
+    return captured
+
+
+def test_orchestrator_reads_federated_config() -> None:
+    """The orchestrator must own the centralized federated config."""
+
+    from src.common.config import FederatedConfig
+
+    orchestrator = FedMedOrchestrator()
+
+    assert isinstance(
+        orchestrator._federated_config,
+        FederatedConfig,
+    )
+
+
+def test_build_server_app_passes_federated_config_to_server_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The orchestrator must forward the federated config into the runtime."""
+
+    captured = _capture_create_server_app_call(monkeypatch)
+
+    orchestrator = FedMedOrchestrator()
+
+    result = orchestrator.build_server_app()
+
+    assert result is not None
+
+    config = orchestrator._federated_config
+
+    assert captured == {
+        "num_rounds": config.num_rounds,
+        "fraction_train": config.fraction_fit,
+        "fraction_evaluate": config.fraction_evaluate,
+        "min_available_nodes": config.min_available_clients,
+    }
+
+
+def test_changing_federated_config_changes_runtime_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Changing the centralized federated configuration must change the
+    runtime policy handed to the Flower server adapter.
+    """
+
+    from src.common.config import FederatedConfig
+
+    captured = _capture_create_server_app_call(monkeypatch)
+
+    orchestrator = FedMedOrchestrator()
+
+    orchestrator._federated_config = FederatedConfig(
+        strategy="fedavg",
+        num_rounds=7,
+        min_clients=2,
+        min_available_clients=3,
+        fraction_fit=0.5,
+        fraction_evaluate=0.25,
+    )
+
+    orchestrator.build_server_app()
+
+    assert captured == {
+        "num_rounds": 7,
+        "fraction_train": 0.5,
+        "fraction_evaluate": 0.25,
+        "min_available_nodes": 3,
+    }
+
+
+@pytest.mark.parametrize(
+    ("federated_config", "error_message"),
+    [
+        (
+            {
+                "strategy": "fedavg",
+                "num_rounds": 0,
+                "min_clients": 1,
+                "min_available_clients": 1,
+                "fraction_fit": 1.0,
+                "fraction_evaluate": 1.0,
+            },
+            "num_rounds must be a positive integer",
+        ),
+        (
+            {
+                "strategy": "fedavg",
+                "num_rounds": 1,
+                "min_clients": 1,
+                "min_available_clients": 0,
+                "fraction_fit": 1.0,
+                "fraction_evaluate": 1.0,
+            },
+            "min_available_nodes must be a positive integer",
+        ),
+        (
+            {
+                "strategy": "fedavg",
+                "num_rounds": 1,
+                "min_clients": 1,
+                "min_available_clients": 1,
+                "fraction_fit": 0.0,
+                "fraction_evaluate": 1.0,
+            },
+            "fraction_train must be a number in the range",
+        ),
+        (
+            {
+                "strategy": "fedavg",
+                "num_rounds": 1,
+                "min_clients": 1,
+                "min_available_clients": 1,
+                "fraction_fit": 1.0,
+                "fraction_evaluate": 0.0,
+            },
+            "fraction_evaluate must be a number in the range",
+        ),
+    ],
+)
+def test_build_server_app_rejects_invalid_federated_config(
+    federated_config: dict[str, object],
+    error_message: str,
+) -> None:
+    """Invalid federated configuration must fail at the runtime boundary."""
+
+    from src.common.config import FederatedConfig
+
+    orchestrator = FedMedOrchestrator()
+    orchestrator._federated_config = FederatedConfig(
+        **federated_config,
+    )
+
+    with pytest.raises(
+        FederatedLearningError,
+        match=error_message,
+    ):
+        orchestrator.build_server_app()
