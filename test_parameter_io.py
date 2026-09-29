@@ -17,7 +17,7 @@ model = FedMedModel()
 parameters = get_model_parameters(model)
 
 print("\nParameter handling test")
-print("-----------------------")
+print("-------------------------")
 
 print("Number of parameter tensors:", len(parameters))
 
