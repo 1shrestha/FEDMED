@@ -1,6 +1,6 @@
 """
 security/tests/test_defenses.py
-================================
+==============================
 Unit tests for security.defenses — Byzantine-robust aggregation.
 
 Tests cover all the four algorithms:
