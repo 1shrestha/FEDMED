@@ -1,85 +1,93 @@
-import React, { useEffect, useRef, useState } from 'react'
-import NodeStatusPanel from './components/NodeStatusPanel.jsx'
-import TrainingChart from './components/TrainingChart.jsx'
-import SegmentationPreview from './components/SegmentationPreview.jsx'
+import React, { useEffect, useRef, useState } from "react";
+import ConvergenceChart from "./components/ConvergenceChart.jsx";
+import NodeStatusPanel from "./components/NodeStatusPanel.jsx";
 
-// Configurable so the SAME build works locally and once deployed.
-// Set VITE_WS_URL in dashboard/.env (local) or as a Netlify env var
-// (production) — see dashboard/.env.example and the README deployment section.
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8765'
-const BASELINE_DICE = 0.81 // replace with the real number printed by central_baseline/train_baseline.py
+const METRICS_WS_URL = import.meta.env.VITE_METRICS_WS_URL || "ws://localhost:8090/ws/metrics";
 
 export default function App() {
-  const [history, setHistory] = useState([])
-  const [connected, setConnected] = useState(false)
-  const [nodes, setNodes] = useState([
-    { id: 0, name: 'Hospital Node A', samples: 20, online: true, lastRound: null },
-    { id: 1, name: 'Hospital Node B', samples: 20, online: true, lastRound: null },
-    { id: 2, name: 'Hospital Node C', samples: 20, online: true, lastRound: null },
-  ])
-  const wsRef = useRef(null)
+  const [rounds, setRounds] = useState([]);
+  const [connected, setConnected] = useState(false);
+  const wsRef = useRef(null);
 
   useEffect(() => {
     function connect() {
-      const ws = new WebSocket(WS_URL)
-      wsRef.current = ws
+      const ws = new WebSocket(METRICS_WS_URL);
+      wsRef.current = ws;
 
-      ws.onopen = () => setConnected(true)
+      ws.onopen = () => setConnected(true);
       ws.onclose = () => {
-        setConnected(false)
-        setTimeout(connect, 2000) // auto-reconnect — training server / ws server may start after the dashboard
-      }
+        setConnected(false);
+        setTimeout(connect, 2000); // auto-reconnect
+      };
+      ws.onerror = () => ws.close();
       ws.onmessage = (event) => {
-        const entry = JSON.parse(event.data)
-        setHistory((prev) => [...prev, entry])
-        setNodes((prev) => prev.map((n) => ({ ...n, lastRound: entry.round })))
-      }
+        const entry = JSON.parse(event.data);
+        setRounds((prev) => {
+          const next = [...prev];
+          const idx = next.findIndex((r) => r.round === entry.round);
+          if (idx >= 0) next[idx] = { ...next[idx], ...entry };
+          else next.push(entry);
+          return next.sort((a, b) => a.round - b.round);
+        });
+      };
     }
-    connect()
-    return () => wsRef.current?.close()
-  }, [])
+    connect();
+    return () => wsRef.current && wsRef.current.close();
+  }, []);
+
+  const latest = rounds[rounds.length - 1];
 
   return (
-    <div className="app">
-      <div className="app-header">
+    <div style={styles.page}>
+      <header style={styles.header}>
         <div>
-          <p className="eyebrow">FedMed / Cross-Silo Federated Learning</p>
-          <h1>Training Dashboard</h1>
+          <h1 style={styles.title}>FedMed Training Dashboard</h1>
+          <p style={styles.subtitle}>
+            Cross-silo federated learning · 3D U-Net · brain tumor segmentation
+          </p>
         </div>
-        <span className="status-pill">
-          <span className="dot" />
-          {connected ? 'live · ws://localhost:8765' : 'waiting for metrics stream…'}
+        <span style={{ ...styles.badge, background: connected ? "#16a34a" : "#dc2626" }}>
+          {connected ? "live" : "reconnecting…"}
         </span>
+      </header>
+
+      <div style={styles.statsRow}>
+        <StatCard label="Round" value={latest?.round ?? "—"} />
+        <StatCard label="Global Val Dice" value={fmt(latest?.val_dice)} />
+        <StatCard label="Global Val Loss" value={fmt(latest?.val_loss)} />
+        <StatCard label="Nodes Reporting" value={latest?.n_clients ?? "—"} />
       </div>
 
-      <div className="grid">
-        <TrainingChart history={history} baselineDice={BASELINE_DICE} />
-        <NodeStatusPanel nodes={nodes} />
+      <div style={styles.grid}>
+        <ConvergenceChart rounds={rounds} />
+        <NodeStatusPanel latest={latest} />
       </div>
-
-      <div className="grid" style={{ marginTop: 20 }}>
-        <SegmentationPreview imageBase64={history[history.length - 1]?.segmentation_png} round={history[history.length - 1]?.round} />
-        <div className="panel">
-          <h2>Privacy Layer</h2>
-          <p className="sub">What never leaves each hospital, and what does.</p>
-          <div className="node-row">
-            <span className="node-name">Raw MRI volumes</span>
-            <span className="badge offline">NEVER TRANSMITTED</span>
-          </div>
-          <div className="node-row">
-            <span className="node-name">Weight deltas</span>
-            <span className="badge online">HE-ENCRYPTED (CKKS)</span>
-          </div>
-          <div className="node-row">
-            <span className="node-name">Aggregation</span>
-            <span className="badge online">DP-NOISED FEDAVG</span>
-          </div>
-        </div>
-      </div>
-
-      <p className="footer-note">
-        history has {history.length} logged round(s) · connected to {WS_URL}
-      </p>
     </div>
-  )
+  );
 }
+
+function fmt(v) {
+  return typeof v === "number" ? v.toFixed(4) : "—";
+}
+
+function StatCard({ label, value }) {
+  return (
+    <div style={styles.card}>
+      <div style={styles.cardLabel}>{label}</div>
+      <div style={styles.cardValue}>{value}</div>
+    </div>
+  );
+}
+
+const styles = {
+  page: { fontFamily: "Inter, system-ui, sans-serif", color: "#e5e7eb", padding: "24px 32px" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 },
+  title: { margin: 0, fontSize: 24 },
+  subtitle: { margin: "4px 0 0", color: "#9ca3af", fontSize: 14 },
+  badge: { padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600, color: "white", height: "fit-content" },
+  statsRow: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 24 },
+  card: { background: "#111827", border: "1px solid #1f2937", borderRadius: 12, padding: "16px 20px" },
+  cardLabel: { fontSize: 12, color: "#9ca3af", marginBottom: 6 },
+  cardValue: { fontSize: 28, fontWeight: 700 },
+  grid: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 },
+};
