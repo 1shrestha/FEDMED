@@ -61,8 +61,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
-import hashlib
-
 import numpy as np
 
 from flwr.app import (
@@ -82,6 +80,7 @@ from src.fl.client import (
     FederatedEvaluateResult,
     FederatedFitResult,
 )
+from src.fl.observability import parameter_fingerprint
 from src.fl.parameters import ParameterPayload
 from src.fl.strategy import (
     FedAvgEvaluationResult,
@@ -236,24 +235,15 @@ class FedMedFlowerStrategy(Strategy):
     def _parameter_fingerprint(
         parameters: Sequence[np.ndarray],
     ) -> str:
-        """Return a deterministic fingerprint for model parameters."""
+        """
+        Return a deterministic fingerprint for model parameters.
 
-        digest = hashlib.sha256()
+        The implementation lives in the framework-independent core so
+        the runtime adapter and the round observability layer report
+        the same fingerprint for the same payload.
+        """
 
-        for parameter in parameters:
-            array = np.asarray(parameter)
-
-            digest.update(
-                str(array.shape).encode("utf-8")
-            )
-            digest.update(
-                str(array.dtype).encode("utf-8")
-            )
-            digest.update(
-                np.ascontiguousarray(array).tobytes()
-            )
-
-        return digest.hexdigest()[:16]
+        return parameter_fingerprint(parameters)
 
     # ==================================================================
     # Training configuration

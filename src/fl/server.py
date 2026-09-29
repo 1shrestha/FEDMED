@@ -44,6 +44,7 @@ FederatedServer owns:
 - RoundCoordinator dependency
 - completed-round progression
 - immutable round execution history
+- derived structured round summaries
 - multi-round orchestration
 
 FederatedServer intentionally does NOT:
@@ -90,6 +91,8 @@ Design invariants
 9. The server delegates one-round execution to RoundCoordinator.
 10. Strategy and Aggregator responsibilities remain outside the
     server.
+11. Round summaries are derived from round history on access. They are
+    not stored and are not part of the durable checkpoint state.
 
 This module is deliberately framework-independent. Runtime-specific
 adapters belong in the application/runtime boundary, such as
@@ -108,6 +111,7 @@ from src.fl.checkpoint import (
     FederationCheckpointStore,
 )
 from src.fl.client import FederatedClient
+from src.fl.observability import FederatedRoundSummary
 from src.fl.parameters import (
     ParameterContract,
     ParameterPayload,
@@ -342,6 +346,80 @@ class FederatedServer:
         return self._round_history
 
     @property
+    def round_summaries(self) -> tuple[
+        FederatedRoundSummary,
+        ...,
+    ]:
+        """
+        Return structured summaries of the completed rounds.
+
+        A summary is a flat, immutable projection of one
+        ``RoundExecution``: participant accounting, sample counts,
+        round-level training loss, optional evaluation observations,
+        and an optional parameter fingerprint.
+
+        Notes
+        -----
+        Summaries are derived on access and are not stored, so they
+        are always consistent with ``round_history``. They contain no
+        Flower message, no client parameters, and no client result
+        object.
+
+        Because they are derived from round history, they are empty
+        before any round completes and after ``restore_checkpoint()``,
+        which does not restore historical rounds.
+        """
+
+        return tuple(
+            FederatedRoundSummary.from_round_execution(
+                execution,
+            )
+            for execution in self._round_history
+        )
+
+    def summary_for_round(
+        self,
+        round_number: int,
+    ) -> FederatedRoundSummary:
+        """
+        Return the summary of one specific completed round.
+
+        Parameters
+        ----------
+        round_number:
+            One-based round number to look up.
+
+        Returns
+        -------
+        FederatedRoundSummary
+            The summary for that round.
+
+        Raises
+        ------
+        FederatedLearningError
+            If the round number is invalid or the round has not
+            completed in this server's history.
+        """
+
+        if isinstance(round_number, bool) or not isinstance(
+            round_number, int
+        ):
+            raise FederatedLearningError(
+                "round_number must be an integer, got "
+                f"{type(round_number).__name__}."
+            )
+
+        for summary in self.round_summaries:
+            if summary.round_number == round_number:
+                return summary
+
+        raise FederatedLearningError(
+            f"No completed round history entry for round "
+            f"{round_number}. The server has completed round "
+            f"{self._completed_round}."
+        )
+
+    @property
     def checkpoint_store(
         self,
     ) -> FederationCheckpointStore | None:
@@ -470,6 +548,10 @@ class FederatedServer:
         )
 
         # Durable state is the global model and round progression.
+        #
+        # Round summaries are derived from round history, so clearing
+        # the history also empties every derived summary. Restoration
+        # intentionally does not restore historical round objects.
         self._round_history = ()
 
         return checkpoint

@@ -1489,6 +1489,7 @@ FedMed/
 │   │   ├── aggregation.py
 │   │   ├── checkpoint.py
 │   │   ├── client.py
+│   │   ├── observability.py
 │   │   ├── orchestrator.py
 │   │   ├── parameters.py
 │   │   ├── rounds.py
@@ -1512,6 +1513,7 @@ FedMed/
 │   ├── test_app_client.py
 │   ├── test_app_server.py
 │   ├── test_loader.py
+│   ├── test_observability.py
 │   ├── test_orchestrator.py
 │   ├── test_partitioner.py
 │   ├── test_e9_centralized.py
@@ -1761,6 +1763,156 @@ reserved federation-policy field (a minimum *selected* client floor) that
 the current `FedMedFlowerStrategy` does not represent. Only
 `min_available_clients` is used, as the availability gate and selection
 floor on the number of Flower nodes.
+
+
+---
+
+41. Structured Federated Round Observability
+
+What was missing
+
+After a federation finished, "what happened in round 3?" was answerable in
+three places and no good one of them:
+
+- `RoundResult` was structured but carried live `FederatedFitResult` /
+  `FederatedEvaluateResult` objects, including each client's full parameter
+  payload and per-client metric mappings.
+- Round information was otherwise spread across coordinator return values
+  and adapter-side logging, so it was not comparable across rounds.
+- The Flower runtime emitted `MetricRecord` values that are not a FedMed
+  record and carry no client-failure accounting.
+
+None of those is a compact, serializable, per-round record. `src/fl/observability.py`
+adds one without changing any existing abstraction.
+
+New module
+
+`src/fl/observability.py` is framework-independent and Flower-free. It exports:
+
+- `FederatedRoundSummary` — frozen, flat record of one completed round
+- `parameter_fingerprint()` — deterministic truncated SHA-256 digest of a payload
+- `ACCURACY_METRIC_KEY` / `FINGERPRINT_LENGTH`
+
+```python
+from src.fl.observability import FederatedRoundSummary
+
+summary = FederatedRoundSummary.from_round_execution(execution)
+
+summary.round_number            # 3
+summary.status                  # RoundState.COMPLETED
+summary.successful_clients      # ('client_a', 'client_b')
+summary.failed_client_ids       # ('client_c',)
+summary.participation_count     # 2
+summary.dropout_count           # 1
+summary.training_examples       # 16
+summary.training_loss           # 0.31
+summary.evaluation_accuracy     # None when the round did not evaluate
+summary.parameter_fingerprint   # '9f2c41ab7e0d5c38'
+```
+
+The server exposes the same records for its whole history:
+
+```python
+server.run(num_rounds=3)
+
+for summary in server.round_summaries:
+    print(summary.round_number, summary.dropout_count)
+
+# or a single round
+server.summary_for_round(2)
+```
+
+Failures stay separated, exactly as in `RoundResult`
+
+`failed_clients` reuses the existing `ClientFailure` type and carries only
+`TRAINING` failures; `evaluation_failures` carries only `EVALUATING` failures. A
+client that trained successfully and then failed evaluation is still counted
+as a successful training client. A client that failed training is never
+reported as successful, so the E6 dropout shape is preserved exactly.
+
+`src/fl/rounds.py` and `app/failure_mod.py` are untouched.
+
+Reporting only, never policy
+
+The summary is a projection. It cannot influence which clients are selected,
+which parameters are aggregated, or whether a round succeeds:
+
+- `training_examples` / `evaluation_examples` are plain sums over already
+  recorded client results.
+- `training_loss` and the evaluation observations are sample-weighted means
+  used for reporting. The round's parameters were already produced by the
+  Strategy/Aggregator before a summary exists.
+
+If a runtime already aggregated evaluation through its Strategy, pass that
+result in and it is recorded verbatim, so reporting matches the runtime
+exactly:
+
+```python
+FederatedRoundSummary.from_round_execution(
+    execution,
+    evaluation=strategy.aggregate_evaluate(
+        execution.result.evaluation_results, round_number
+    ),
+)
+```
+
+Parameter fingerprint
+
+`parameter_fingerprint()` hashes each parameter's shape, dtype, and bytes, so
+identical payloads always produce an identical 16-character digest and a
+changed model produces a different one. That makes it a cheap "did the model
+actually change?" signal across rounds. The Flower adapter's private
+`_parameter_fingerprint` in `app/server.py` now delegates to the core helper
+instead of keeping a second implementation.
+
+Checkpoint relationship
+
+A summary is derived on access from round history. It is never stored and is
+never part of `FederationCheckpoint`, so a restored server resumes with empty
+`round_summaries` exactly as it already resumes with empty `round_history`.
+Checkpoint contents are unchanged.
+
+Usage
+
+```python
+server.run(num_rounds=3, evaluate=True)
+
+summary = server.summary_for_round(3)
+
+if summary.dropout_count:
+    # participation is already reported, no client lookup needed
+    print(summary.successful_clients, summary.failed_client_ids)
+```
+
+`round_summaries` is recomputed on access rather than cached, so it is always
+consistent with `round_history` and adds no server state.
+
+Architecture fit
+
+- Pure NumPy/dataclasses work under `src/`; no Flower import.
+- Reuses `RoundExecution`, `RoundResult`, `ClientFailure`, `RoundState`, and
+  `FedAvgEvaluationResult`. No existing type is extended or replaced.
+- Strategy and Aggregator are untouched.
+- `FederatedServer`'s four positional constructor arguments are unchanged; the
+  additions are a read-only property and one lookup method.
+
+Current scope limit
+
+As with checkpointing, the Flower runtime path in `app/server.py` adapts
+`FedAvgStrategy` directly and does not route through `FederatedServer`, so
+`round_summaries` is available at the `FederatedServer` level only. The core
+fingerprint helper is shared by both paths, so there is a single definition.
+
+Round observability test coverage
+
+88 tests covering valid summary creation, round-number validation,
+inconsistent client-set rejection, successful/failed accounting, metric
+validation including non-finite and out-of-range accuracy, the empty
+failed-client set, `RoundExecution` derivation, `FederatedServer.round_summaries`
+and `summary_for_round`, multiple completed rounds, existing server behavior
+under dropout and total failure, checkpoint restore leaving summaries empty,
+fingerprint determinism and sensitivity, and an AST scan proving the module
+imports no Flower module.
 
 
 ---
