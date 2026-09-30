@@ -1,3 +1,8 @@
+# ============================================================
+# FedMed - Combined Dependencies
+# ============================================================
+
+# Team / service dependencies
 fastapi
 uvicorn[standard]
 asyncpg
@@ -5,3 +10,11 @@ pydantic>=2
 grpcio
 grpcio-tools
 httpx
+
+# FedMed core dependencies
+numpy
+PyYAML
+torch
+
+# Testing
+pytest
