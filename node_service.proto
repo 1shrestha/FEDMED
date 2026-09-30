@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package fedmed.node;
+
+// NodeService handles the hospital/client node registration, discovery,
+// and liveness (heartbeat) — the control-plane, not the FL weight exchange.
+service NodeService {
+  // A hospital node calls this once on startup to join the pool.
+  rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+
+  // A hospital node calls this periodically (e.g. every 5s) to prove liveness.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // The server (or dashboard/backend) calls this to list all known nodes
+  // and their current status.
+  rpc GetNodeStatus(GetNodeStatusRequest) returns (NodeStatusList);
+}
+
+enum NodeState {
+  UNKNOWN = 0;
+  ACTIVE = 1;    // recent heartbeat received
+  SUSPECT = 2;   // missed one or more heartbeats, not yet dead
+  DEAD = 3;      // missed heartbeats past the dead threshold
+}
+
+message RegisterNodeRequest {
+  string node_id = 1;        // stable unique id, e.g. "hospital-a"
+  string hospital_name = 2;  // display name
+  string address = 3;        // host:port the node can be reached on, if needed
+  int32 dataset_size = 4;    // number of local samples (for logging/weighting)
+}
+
+message RegisterNodeResponse {
+  bool success = 1;
+  string message = 2;
+  int64 server_time_unix = 3; // let the node sync its clock roughly
+}
+
+message HeartbeatRequest {
+  string node_id = 1;
+  int64 client_time_unix = 2;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  int64 server_time_unix = 2;
+}
+
+message GetNodeStatusRequest {
+  // empty for now — placeholder for future filters
+}
+
+message NodeStatusEntry {
+  string node_id = 1;
+  string hospital_name = 2;
+  NodeState state = 3;
+  int64 last_heartbeat_unix = 4;
+  int32 dataset_size = 5;
+}
+
+message NodeStatusList {
+  repeated NodeStatusEntry nodes = 1;
+}

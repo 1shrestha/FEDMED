@@ -1,0 +1,9 @@
+**/__pycache__
+**/*.pyc
+.git
+.env
+data/
+keys/
+dashboard/node_modules
+dashboard/dist
+*.log

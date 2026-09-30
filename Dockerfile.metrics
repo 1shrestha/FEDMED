@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir fastapi uvicorn[standard] requests
+
+COPY central_server/metrics_hub.py central_server/metrics_hub.py
+
+EXPOSE 8090
+CMD ["python", "central_server/metrics_hub.py"]

@@ -1,0 +1,63 @@
+# TEMPLATE -- apply once PER HOSPITAL, inside that hospital's OWN cluster,
+# not the cluster running the central server. This is the key cross-silo
+# boundary: each institution owns and operates its own node and its own
+# data volume; nothing here should ever be co-located with another
+# hospital's resources.
+#
+# Before applying:
+#   1. Replace HOSPITAL_ID everywhere below (e.g. "hospital-a").
+#   2. Get public_context.bin from the server operator out-of-band
+#      (secure file transfer, not checked into git) and create the secret:
+#        kubectl create secret generic fedmed-public-ctx \
+#          --from-file=public_context.bin=./public_context.bin -n fedmed
+#   3. Point the PV/PVC below at this hospital's own local BraTS-formatted
+#      data export -- never a shared or network volume visible to other
+#      hospitals.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: HOSPITAL_ID-data
+  namespace: fedmed
+spec:
+  accessModes: ["ReadOnlyMany"]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: HOSPITAL_ID-node
+  namespace: fedmed
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: HOSPITAL_ID-node }
+  template:
+    metadata:
+      labels: { app: HOSPITAL_ID-node }
+    spec:
+      containers:
+        - name: fedmed-client
+          image: fedmed/client-node:latest
+          env:
+            - { name: NODE_ID, value: "HOSPITAL_ID" }
+            - { name: NODE_DATA_DIR, value: "/data/HOSPITAL_ID" }
+            - { name: SERVER_ADDRESS, value: "central-server.fedmed.example.org:8080" }
+            - { name: PUBLIC_CTX_PATH, value: "/keys/public_context.bin" }
+            - { name: LOCAL_EPOCHS, value: "1" }
+            - { name: LEARNING_RATE, value: "1e-4" }
+          resources:
+            requests: { cpu: "2", memory: "8Gi" }
+            limits: { cpu: "4", memory: "16Gi", nvidia.com/gpu: "1" }
+          volumeMounts:
+            - { name: data, mountPath: /data/HOSPITAL_ID, readOnly: true }
+            - { name: keys, mountPath: /keys, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: HOSPITAL_ID-data
+        - name: keys
+          secret:
+            secretName: fedmed-public-ctx

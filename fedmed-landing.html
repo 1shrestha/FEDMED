@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FedMed — federated learning for brain tumor MRI segmentation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1B2A1E;
+    --ink-muted: #5E6B58;
+    --paper: #F1EAD5;
+    --panel: #E7DEC1;
+    --line: #D7CBA3;
+    --signal: #1F4A31;
+    --signal-soft: #DEE6D5;
+    --accent: #B4832E;
+    --node: #2F6B43;
+    --deep: #16281B;
+    --deep-ink: #EFE9D6;
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --ink: #EAE6D4;
+      --ink-muted: #9BA895;
+      --paper: #121A14;
+      --panel: #1A2419;
+      --line: #2C3A28;
+      --signal: #6FCB93;
+      --signal-soft: #1E3324;
+      --accent: #D9A85A;
+      --node: #6FCB93;
+      --deep: #0C120D;
+      --deep-ink: #EFE9D6;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #EAE6D4;
+    --ink-muted: #9BA895;
+    --paper: #121A14;
+    --panel: #1A2419;
+    --line: #2C3A28;
+    --signal: #6FCB93;
+    --signal-soft: #1E3324;
+    --accent: #D9A85A;
+    --node: #6FCB93;
+    --deep: #0C120D;
+    --deep-ink: #EFE9D6;
+  }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); scroll-behavior: smooth; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+    cursor: default;
+  }
+  a { color: inherit; }
+  img, svg { max-width: 100%; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- Scroll progress ---------- */
+  .progress {
+    position: fixed; top: env(safe-area-inset-top, 0px); left: 0; height: 3px;
+    background: var(--signal); width: 0%; z-index: 60;
+    transition: width 0.1s linear;
+  }
+
+  /* ---------- Custom cursor ---------- */
+  .cursor-dot {
+    position: fixed; top: 0; left: 0; width: 18px; height: 18px;
+    border: 1.5px solid var(--signal); border-radius: 50%;
+    pointer-events: none; z-index: 999; mix-blend-mode: normal;
+    transform: translate(-50%, -50%);
+    transition: width 0.18s ease, height 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+    will-change: transform;
+  }
+  .cursor-dot.grow { width: 40px; height: 40px; background: var(--signal-soft); }
+  @media (hover: none), (pointer: coarse) { .cursor-dot { display: none; } }
+
+  /* ---------- Nav ---------- */
+  nav.top {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 26px 28px; max-width: 1120px; margin: 0 auto; position: relative; z-index: 20;
+  }
+  .wordmark { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  .wordmark span { color: var(--signal); }
+  .nav-links { display: flex; gap: 30px; font-size: 14.5px; color: var(--ink-muted); }
+  .nav-links a {
+    text-decoration: none; position: relative; padding-bottom: 3px;
+  }
+  .nav-links a::after {
+    content: ""; position: absolute; left: 0; bottom: 0; height: 1.5px; width: 100%;
+    background: var(--signal); transform: scaleX(0); transform-origin: left;
+    transition: transform 0.28s ease;
+  }
+  .nav-links a:hover, .nav-links a.active { color: var(--ink); }
+  .nav-links a:hover::after, .nav-links a.active::after { transform: scaleX(1); }
+  @media (max-width: 640px) { .nav-links { display: none; } }
+
+  /* ---------- Hero ---------- */
+  .hero { padding: 30px 0 60px; }
+  .hero-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; }
+  @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 40px; } }
+  .hero h1 {
+    font-family: var(--font-display); font-weight: 500; font-size: clamp(34px, 4.6vw, 54px);
+    line-height: 1.08; letter-spacing: -0.01em; margin: 0 0 22px;
+  }
+  .hero p.lede { font-size: 18px; color: var(--ink-muted); max-width: 46ch; margin: 0 0 28px; }
+  .hero-tags { display: flex; flex-wrap: wrap; gap: 10px; font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-muted); }
+  .hero-tags span {
+    border: 1px solid var(--line); border-radius: 20px; padding: 6px 13px;
+    display: inline-block; transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  }
+  .hero-tags span:hover { background: var(--signal); border-color: var(--signal); color: var(--deep-ink); }
+
+  .diagram-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px;
+    transform-style: preserve-3d; transition: transform 0.15s ease-out, box-shadow 0.25s ease;
+    will-change: transform;
+  }
+  .diagram-card:hover { box-shadow: 0 18px 38px -22px rgba(22, 40, 27, 0.35); }
+  .diagram-caption { font-size: 12.5px; color: var(--ink-muted); margin-top: 10px; text-align: center; }
+
+  /* ---------- Stats strip ---------- */
+  .stats { padding: 8px 0 54px; }
+  .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+  @media (max-width: 640px) { .stats-row { grid-template-columns: 1fr; gap: 22px; } }
+  .stat .num {
+    font-family: var(--font-display); font-size: clamp(36px, 5vw, 52px); font-weight: 500;
+    color: var(--signal); line-height: 1;
+  }
+  .stat .label { margin-top: 8px; color: var(--ink-muted); font-size: 14px; }
+
+  /* ---------- Marquee band ---------- */
+  .marquee-band {
+    background: var(--deep); color: var(--deep-ink); overflow: hidden;
+    padding: 22px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .marquee-track {
+    display: flex; width: max-content;
+    animation: marquee 26s linear infinite;
+  }
+  .marquee-band:hover .marquee-track { animation-play-state: paused; }
+  .marquee-group { display: flex; align-items: center; flex-shrink: 0; }
+  .marquee-track span {
+    font-family: var(--font-display); font-style: italic; font-weight: 500;
+    font-size: clamp(20px, 2.6vw, 30px); white-space: nowrap; padding: 0 20px;
+  }
+  .marquee-track .sep { font-style: normal; color: var(--accent); opacity: 0.8; }
+  @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+  /* ---------- Section shell ---------- */
+  section { padding: 76px 0; border-top: 1px solid var(--line); }
+  .section-head { display: grid; grid-template-columns: 0.85fr 1.15fr; gap: 40px; margin-bottom: 44px; }
+  @media (max-width: 760px) { .section-head { grid-template-columns: 1fr; gap: 14px; } }
+  .section-head h2 {
+    font-family: var(--font-display); font-weight: 500; font-size: clamp(24px, 2.6vw, 32px);
+    line-height: 1.18; margin: 0;
+  }
+  .section-head .deck { color: var(--ink-muted); font-size: 16px; max-width: 54ch; }
+
+  /* ---------- Problem ---------- */
+  .problem-body p { font-size: 16.5px; color: var(--ink-muted); max-width: 62ch; margin: 0 0 16px; }
+  .problem-body strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- Pipeline ---------- */
+  .pipeline { display: flex; flex-direction: column; }
+  .step {
+    display: grid; grid-template-columns: 56px 1fr; gap: 22px; padding: 26px 0;
+    border-top: 1px solid var(--line); transition: padding-left 0.3s ease;
+  }
+  .step:first-child { border-top: none; }
+  .step-num {
+    font-family: var(--font-display); font-size: 26px; color: var(--ink-muted); font-weight: 500;
+    transition: color 0.3s ease, transform 0.3s ease;
+  }
+  .step h3 { margin: 0 0 6px; font-size: 17px; font-weight: 600; transition: color 0.3s ease; }
+  .step p { margin: 0; color: var(--ink-muted); font-size: 15px; max-width: 58ch; }
+  .step.active { padding-left: 10px; }
+  .step.active .step-num { color: var(--signal); transform: scale(1.12); }
+  .step.active h3 { color: var(--signal); }
+
+  /* ---------- Stack ---------- */
+  .stack-list { display: grid; gap: 0; border-top: 1px solid var(--line); }
+  .stack-row {
+    display: grid; grid-template-columns: 200px 1fr; gap: 24px; padding: 20px 0;
+    border-bottom: 1px solid var(--line); transition: background 0.25s ease, padding-left 0.25s ease;
+  }
+  .stack-row:hover { background: var(--panel); padding-left: 12px; border-radius: 8px; }
+  @media (max-width: 640px) { .stack-row { grid-template-columns: 1fr; gap: 6px; } }
+  .stack-role { font-size: 13px; color: var(--ink-muted); padding-top: 2px; }
+  .stack-detail h4 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+  .stack-detail code {
+    font-family: var(--font-mono); font-size: 13px; color: var(--signal);
+    background: var(--signal-soft); padding: 1px 7px; border-radius: 4px;
+  }
+  .stack-detail p { margin: 6px 0 0; font-size: 14.5px; color: var(--ink-muted); max-width: 60ch; }
+
+  /* ---------- Status ---------- */
+  .status-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 32px; }
+  .status-row {
+    display: grid; grid-template-columns: 90px 1fr auto; align-items: center; gap: 18px; padding: 13px 0;
+  }
+  .status-row + .status-row { border-top: 1px solid var(--line); }
+  .status-week { font-family: var(--font-mono); font-size: 13px; color: var(--ink-muted); }
+  .status-label { font-size: 14.5px; }
+  .status-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .status-dot.done { background: var(--node); }
+  .status-dot.now { background: var(--accent); }
+  .status-tag { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-muted); display: flex; align-items: center; gap: 8px; }
+
+  /* ---------- Footer ---------- */
+  footer { padding: 56px 0 64px; border-top: 1px solid var(--line); }
+  footer .foot-grid { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap; }
+  footer p { color: var(--ink-muted); font-size: 14.5px; max-width: 48ch; margin: 0; }
+  footer .foot-meta { font-family: var(--font-mono); font-size: 12px; color: var(--ink-muted); text-align: right; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; }
+    .marquee-track { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+<div class="cursor-dot" id="cursorDot"></div>
+
+<nav class="top">
+  <div class="wordmark magnetic">Fed<span>Med</span></div>
+  <div class="nav-links">
+    <a href="#how" class="magnetic">How it works</a>
+    <a href="#stack" class="magnetic">Under the hood</a>
+    <a href="#status" class="magnetic">Status</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <h1>One brain‑tumor model, trained across three hospitals — without a single scan changing hands.</h1>
+      <p class="lede">FedMed is a federated learning system for MRI segmentation. Each hospital keeps its patient scans exactly where they are; only encrypted model updates travel between nodes.</p>
+      <div class="hero-tags">
+        <span class="magnetic">3 hospital nodes</span>
+        <span class="magnetic">3D U‑Net segmentation</span>
+        <span class="magnetic">Homomorphic encryption</span>
+        <span class="magnetic">Differential privacy</span>
+      </div>
+    </div>
+    <div>
+      <div class="diagram-card" id="diagramCard">
+        <svg viewBox="0 0 420 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram of three hospital nodes sending encrypted updates to a central aggregator, which returns an improved shared model">
+          <path id="p1" d="M 92 70 C 150 70, 150 150, 210 160" fill="none" stroke="var(--line)" stroke-width="2"/>
+          <path id="p2" d="M 92 160 C 150 160, 150 160, 210 160" fill="none" stroke="var(--line)" stroke-width="2"/>
+          <path id="p3" d="M 92 250 C 150 250, 150 170, 210 160" fill="none" stroke="var(--line)" stroke-width="2"/>
+
+          <circle r="3.4" fill="var(--signal)">
+            <animateMotion dur="3.2s" repeatCount="indefinite" begin="0s"><mpath href="#p1"/></animateMotion>
+          </circle>
+          <circle r="3.4" fill="var(--signal)">
+            <animateMotion dur="3.2s" repeatCount="indefinite" begin="1.05s"><mpath href="#p2"/></animateMotion>
+          </circle>
+          <circle r="3.4" fill="var(--signal)">
+            <animateMotion dur="3.2s" repeatCount="indefinite" begin="2.1s"><mpath href="#p3"/></animateMotion>
+          </circle>
+          <circle r="3.4" fill="var(--accent)">
+            <animateMotion dur="3.2s" repeatCount="indefinite" begin="1.6s" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href="#p1"/></animateMotion>
+          </circle>
+
+          <g>
+            <rect x="34" y="50" width="58" height="40" rx="8" fill="var(--paper)" stroke="var(--line)" stroke-width="1.5"/>
+            <path d="M 63 62 v 16 M 55 70 h 16" stroke="var(--signal)" stroke-width="2.5" stroke-linecap="round"/>
+            <text x="63" y="106" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="var(--ink-muted)">Node A</text>
+          </g>
+          <g>
+            <rect x="34" y="140" width="58" height="40" rx="8" fill="var(--paper)" stroke="var(--line)" stroke-width="1.5"/>
+            <path d="M 63 152 v 16 M 55 160 h 16" stroke="var(--signal)" stroke-width="2.5" stroke-linecap="round"/>
+            <text x="63" y="196" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="var(--ink-muted)">Node B</text>
+          </g>
+          <g>
+            <rect x="34" y="230" width="58" height="40" rx="8" fill="var(--paper)" stroke="var(--line)" stroke-width="1.5"/>
+            <path d="M 63 242 v 16 M 55 250 h 16" stroke="var(--signal)" stroke-width="2.5" stroke-linecap="round"/>
+            <text x="63" y="286" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="var(--ink-muted)">Node C</text>
+          </g>
+
+          <circle cx="240" cy="160" r="38" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.5"/>
+          <text x="240" y="156" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--signal)">FedAvg</text>
+          <text x="240" y="170" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="var(--signal)">+ DP noise</text>
+          <text x="240" y="230" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="var(--ink-muted)">global model</text>
+        </svg>
+        <p class="diagram-caption">Encrypted updates flow in · an improved shared model flows back out. Raw scans never move.</p>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="stats">
+  <div class="wrap stats-row">
+    <div class="stat"><div class="num" data-count="3">0</div><div class="label">simulated hospital nodes</div></div>
+    <div class="stat"><div class="num" data-count="5">0</div><div class="label">steps in every training round</div></div>
+    <div class="stat"><div class="num" data-count="6">0</div><div class="label">weeks into development</div></div>
+  </div>
+</div>
+
+<div class="marquee-band">
+  <div class="marquee-track" id="marqueeTrack">
+    <div class="marquee-group">
+      <span>Federated Learning <span class="sep">✦</span></span>
+      <span>Homomorphic Encryption <span class="sep">✦</span></span>
+      <span>Differential Privacy <span class="sep">✦</span></span>
+      <span>3D U‑Net Segmentation <span class="sep">✦</span></span>
+      <span>Secure Aggregation <span class="sep">✦</span></span>
+      <span>BraTS Dataset <span class="sep">✦</span></span>
+    </div>
+    <div class="marquee-group" aria-hidden="true">
+      <span>Federated Learning <span class="sep">✦</span></span>
+      <span>Homomorphic Encryption <span class="sep">✦</span></span>
+      <span>Differential Privacy <span class="sep">✦</span></span>
+      <span>3D U‑Net Segmentation <span class="sep">✦</span></span>
+      <span>Secure Aggregation <span class="sep">✦</span></span>
+      <span>BraTS Dataset <span class="sep">✦</span></span>
+    </div>
+  </div>
+</div>
+
+<section id="problem">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Why hospitals can't just pool their data</h2>
+      <div class="deck problem-body">
+        <p>A tumor-segmentation model gets better with more MRI scans — but medical imaging data is some of the most tightly regulated data there is. <strong>Hospitals can't legally or practically ship patient scans to a shared server</strong>, and any single hospital's dataset is usually too small and too narrow to train a model that generalizes well.</p>
+        <p>Federated learning sidesteps the problem: instead of moving data to the model, FedMed moves the model to the data — training locally at each hospital and combining only the resulting knowledge, under encryption.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>How a training round works</h2>
+      <p class="deck">Five steps, repeated every round, across all three simulated hospital nodes. Scroll to see each one activate.</p>
+    </div>
+    <div class="pipeline">
+      <div class="step" data-step>
+        <div class="step-num">01</div>
+        <div><h3>Local training</h3><p>Each node trains a 3D U‑Net (PyTorch + MONAI) on its own MRI volumes. The scans never leave the hospital's own server.</p></div>
+      </div>
+      <div class="step" data-step>
+        <div class="step-num">02</div>
+        <div><h3>Encrypted updates</h3><p>Only the resulting model weight updates leave the node — homomorphically encrypted with TenSEAL, so no one downstream can read them in the clear.</p></div>
+      </div>
+      <div class="step" data-step>
+        <div class="step-num">03</div>
+        <div><h3>Secure transport</h3><p>Updates travel over gRPC with TLS between each node and the aggregation server, end to end.</p></div>
+      </div>
+      <div class="step" data-step>
+        <div class="step-num">04</div>
+        <div><h3>Private aggregation</h3><p>FedAvg combines the encrypted updates into one global model. Differential‑privacy noise is added so no single hospital's scans can be reverse‑engineered from the result.</p></div>
+      </div>
+      <div class="step" data-step>
+        <div class="step-num">05</div>
+        <div><h3>Shared model, sent back</h3><p>The improved global model — better than any one hospital could train alone — returns to every node for the next round.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="stack">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Under the hood</h2>
+      <p class="deck">The stack behind each part of the pipeline above.</p>
+    </div>
+    <div class="stack-list">
+      <div class="stack-row">
+        <div class="stack-role">Segmentation model</div>
+        <div class="stack-detail">
+          <h4>3D U‑Net <code>PyTorch + MONAI</code></h4>
+          <p>Trained on the BraTS brain-tumor MRI dataset; establishes the centralized-baseline accuracy the federated model is measured against.</p>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-role">Federated orchestration</div>
+        <div class="stack-detail">
+          <h4>FedAvg <code>Flower / PySyft</code></h4>
+          <p>Coordinates training rounds across all three simulated hospital nodes and handles a node dropping out mid-round.</p>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-role">Privacy layer</div>
+        <div class="stack-detail">
+          <h4>Encryption <code>TenSEAL</code></h4>
+          <p>Homomorphic encryption on every update before it leaves a node, plus differential-privacy noise at aggregation time.</p>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-role">Transport</div>
+        <div class="stack-detail">
+          <h4>Node ↔ server <code>gRPC + TLS</code></h4>
+          <p>Every message between a hospital node and the aggregation server is encrypted in transit.</p>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-role">Monitoring</div>
+        <div class="stack-detail">
+          <h4>Live dashboard <code>React + Recharts</code></h4>
+          <p>Streams per-node training metrics over WebSocket as each round runs.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Where the project stands</h2>
+      <p class="deck">An internship project, currently in its fifth and sixth week of development.</p>
+    </div>
+    <div class="status-panel">
+      <div class="status-row">
+        <div class="status-week">Week 1</div>
+        <div class="status-label">Centralized baseline &amp; node scaffolding</div>
+        <div class="status-tag"><span class="status-dot done"></span>Done</div>
+      </div>
+      <div class="status-row">
+        <div class="status-week">Week 2</div>
+        <div class="status-label">Federated training loop, secure gRPC, node resilience</div>
+        <div class="status-tag"><span class="status-dot done"></span>Done</div>
+      </div>
+      <div class="status-row">
+        <div class="status-week">Week 3</div>
+        <div class="status-label">Homomorphic encryption &amp; live metrics streaming</div>
+        <div class="status-tag"><span class="status-dot done"></span>Done</div>
+      </div>
+      <div class="status-row">
+        <div class="status-week">Week 4</div>
+        <div class="status-label">Differential privacy &amp; dashboard polish</div>
+        <div class="status-tag"><span class="status-dot done"></span>Done</div>
+      </div>
+      <div class="status-row">
+        <div class="status-week">Week 5–6</div>
+        <div class="status-label">Privacy-budget tuning, dashboard alerting, benchmark validation</div>
+        <div class="status-tag"><span class="status-dot now"></span>In progress</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-grid">
+    <p>FedMed is a research project exploring how hospitals can collaborate on medical imaging AI without any patient data leaving their own systems.</p>
+    <div class="foot-meta">Internship project<br/>Team lead</div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var fineHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+  /* Scroll progress bar */
+  var progress = document.getElementById('progress');
+  function updateProgress() {
+    var h = document.documentElement;
+    var scrollTop = h.scrollTop || document.body.scrollTop;
+    var scrollHeight = (h.scrollHeight || document.body.scrollHeight) - h.clientHeight;
+    var pct = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+    progress.style.width = pct + '%';
+  }
+  document.addEventListener('scroll', function () { requestAnimationFrame(updateProgress); }, { passive: true });
+  updateProgress();
+
+  /* Custom cursor */
+  if (fineHover) {
+    var dot = document.getElementById('cursorDot');
+    var tx = 0, ty = 0, cx = 0, cy = 0;
+    window.addEventListener('mousemove', function (e) { tx = e.clientX; ty = e.clientY; });
+    function raf() {
+      cx += (tx - cx) * 0.22;
+      cy += (ty - cy) * 0.22;
+      dot.style.transform = 'translate(' + cx + 'px,' + cy + 'px) translate(-50%,-50%)';
+      requestAnimationFrame(raf);
+    }
+    raf();
+    document.querySelectorAll('a, .magnetic, .stack-row, .diagram-card, .hero-tags span').forEach(function (el) {
+      el.addEventListener('mouseenter', function () { dot.classList.add('grow'); });
+      el.addEventListener('mouseleave', function () { dot.classList.remove('grow'); });
+    });
+  }
+
+  /* Magnetic elements */
+  if (fineHover && !reduceMotion) {
+    document.querySelectorAll('.magnetic').forEach(function (el) {
+      el.style.transition = 'transform 0.25s ease';
+      el.addEventListener('mousemove', function (e) {
+        var r = el.getBoundingClientRect();
+        var mx = e.clientX - (r.left + r.width / 2);
+        var my = e.clientY - (r.top + r.height / 2);
+        el.style.transform = 'translate(' + mx * 0.25 + 'px,' + my * 0.35 + 'px)';
+      });
+      el.addEventListener('mouseleave', function () { el.style.transform = 'translate(0,0)'; });
+    });
+  }
+
+  /* Tilt on hero diagram */
+  var card = document.getElementById('diagramCard');
+  if (fineHover && !reduceMotion && card) {
+    card.addEventListener('mousemove', function (e) {
+      var r = card.getBoundingClientRect();
+      var px = (e.clientX - r.left) / r.width - 0.5;
+      var py = (e.clientY - r.top) / r.height - 0.5;
+      card.style.transform = 'perspective(700px) rotateX(' + (py * -6) + 'deg) rotateY(' + (px * 8) + 'deg)';
+    });
+    card.addEventListener('mouseleave', function () {
+      card.style.transform = 'perspective(700px) rotateX(0) rotateY(0)';
+    });
+  }
+
+  /* Active pipeline step */
+  var steps = document.querySelectorAll('[data-step]');
+  if ('IntersectionObserver' in window && steps.length) {
+    var stepIo = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) entry.target.classList.add('active');
+        else entry.target.classList.remove('active');
+      });
+    }, { threshold: 0.5 });
+    steps.forEach(function (el) { stepIo.observe(el); });
+  }
+
+  /* Nav scroll-spy */
+  var navLinks = document.querySelectorAll('.nav-links a');
+  var sections = ['how', 'stack', 'status'].map(function (id) { return document.getElementById(id); });
+  if ('IntersectionObserver' in window) {
+    var navIo = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        var link = document.querySelector('.nav-links a[href="#' + entry.target.id + '"]');
+        if (!link) return;
+        if (entry.isIntersecting) {
+          navLinks.forEach(function (l) { l.classList.remove('active'); });
+          link.classList.add('active');
+        }
+      });
+    }, { threshold: 0.4 });
+    sections.forEach(function (s) { if (s) navIo.observe(s); });
+  }
+
+  /* Count-up stats */
+  var stats = document.querySelectorAll('.stat .num');
+  if ('IntersectionObserver' in window && stats.length) {
+    var statIo = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        var el = entry.target;
+        var target = parseInt(el.getAttribute('data-count'), 10) || 0;
+        statIo.unobserve(el);
+        if (reduceMotion) { el.textContent = target; return; }
+        var start = null, dur = 900;
+        function step(ts) {
+          if (!start) start = ts;
+          var p = Math.min((ts - start) / dur, 1);
+          el.textContent = Math.round(p * target);
+          if (p < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+      });
+    }, { threshold: 0.2 });
+    stats.forEach(function (el) { statIo.observe(el); });
+  }
+})();
+</script>
+
+</body>
+</html>

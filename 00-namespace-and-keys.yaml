@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fedmed
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fedmed-keys
+  namespace: fedmed
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fedmed-keygen
+  namespace: fedmed
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: keygen
+          image: fedmed/keygen:latest
+          env:
+            - name: KEYS_DIR
+              value: /keys
+          volumeMounts:
+            - name: keys
+              mountPath: /keys
+      volumes:
+        - name: keys
+          persistentVolumeClaim:
+            claimName: fedmed-keys

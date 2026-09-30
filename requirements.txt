@@ -1,19 +1,20 @@
 # ============================================================
-# FedMed - Core Dependencies
+# FedMed - Combined Dependencies
 # ============================================================
 
-# Numerical computing
+# Team / service dependencies
+fastapi
+uvicorn[standard]
+asyncpg
+pydantic>=2
+grpcio
+grpcio-tools
+httpx
+
+# FedMed core dependencies
 numpy
-
-# Configuration
 PyYAML
-
-# Deep learning
-torch==2.7.1
-
-# Federated learning runtime
-flwr==1.34.0
-ray==2.55.1
+torch
 
 # Testing
 pytest

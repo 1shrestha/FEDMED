@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-hub
+  namespace: fedmed
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: metrics-hub }
+  template:
+    metadata:
+      labels: { app: metrics-hub }
+    spec:
+      containers:
+        - name: metrics-hub
+          image: fedmed/metrics-hub:latest
+          ports: [{ containerPort: 8090 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-hub
+  namespace: fedmed
+spec:
+  selector: { app: metrics-hub }
+  ports:
+    - { port: 8090, targetPort: 8090 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: central-server
+  namespace: fedmed
+spec:
+  replicas: 1  # exactly one: FL global-model state is not horizontally scalable
+  selector:
+    matchLabels: { app: central-server }
+  template:
+    metadata:
+      labels: { app: central-server }
+    spec:
+      containers:
+        - name: central-server
+          image: fedmed/central-server:latest
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: NUM_ROUNDS, value: "20" }
+            - { name: MIN_CLIENTS, value: "3" }
+            - { name: KEYS_DIR, value: "/keys" }
+            - { name: METRICS_HUB_URL, value: "http://metrics-hub:8090" }
+          volumeMounts:
+            - { name: keys, mountPath: /keys, readOnly: true }
+      volumes:
+        - name: keys
+          persistentVolumeClaim:
+            claimName: fedmed-keys
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: central-server
+  namespace: fedmed
+spec:
+  # LoadBalancer/NodePort with TLS termination (mTLS to nodes) in real
+  # deployments -- hospital nodes reach this over the public internet or a
+  # dedicated VPN, since each hospital runs its own cluster.
+  type: LoadBalancer
+  selector: { app: central-server }
+  ports:
+    - { port: 8080, targetPort: 8080 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: fedmed
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: dashboard }
+  template:
+    metadata:
+      labels: { app: dashboard }
+    spec:
+      containers:
+        - name: dashboard
+          image: fedmed/dashboard:latest
+          ports: [{ containerPort: 5173 }]
+          env:
+            - { name: VITE_METRICS_WS_URL, value: "wss://metrics.fedmed.example.org/ws/metrics" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: fedmed
+spec:
+  type: LoadBalancer
+  selector: { app: dashboard }
+  ports:
+    - { port: 80, targetPort: 5173 }

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package fedmed.control;
+
+// TrainingControlService carries round-level control signals between the
+// central server and hospital nodes. It does NOT carry model weights —
+// that exchange is handled by Flower's own client/server channel.
+// This service exists so your distributed-systems layer can tell nodes
+// "a round is starting" / "we got your update" independently of the FL
+// framework's internals, which keeps orchestration and resilience logic
+// decoupled from the ML training loop.
+service TrainingControlService {
+  // Server -> Node: announces a new round is starting and the node is selected.
+  rpc NotifyRoundStart(RoundStartNotice) returns (Ack);
+
+  // Node -> Server: confirms it has submitted its model update to Flower's
+  // aggregation channel for this round (used for tracking/timeout logic).
+  rpc SubmitUpdateAck(UpdateAck) returns (Ack);
+}
+
+message RoundStartNotice {
+  int32 round_number = 1;
+  repeated string selected_node_ids = 2;
+  int64 deadline_unix = 3; // node should submit its update before this time
+}
+
+message UpdateAck {
+  string node_id = 1;
+  int32 round_number = 2;
+  bool success = 3;
+  string detail = 4;
+}
+
+message Ack {
+  bool received = 1;
+}
